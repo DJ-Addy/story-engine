@@ -1,0 +1,51 @@
+"""FastAPI dependencies: repository access and authentication."""
+
+from __future__ import annotations
+
+from fastapi import Depends, HTTPException
+from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
+
+from app.api import auth
+from app.api.repo import InMemoryRepository, ProjectRecord, Repository, UserRecord
+
+# Module-level singleton so all requests share state; tests override get_repo
+# with a fresh InMemoryRepository via app.dependency_overrides.
+_repo: Repository = InMemoryRepository()
+
+_bearer = HTTPBearer(auto_error=False)
+
+
+def get_repo() -> Repository:
+    return _repo
+
+
+def get_current_user(
+    credentials: HTTPAuthorizationCredentials | None = Depends(_bearer),
+    repo: Repository = Depends(get_repo),
+) -> UserRecord:
+    unauthorized = HTTPException(
+        status_code=401,
+        detail="Not authenticated",
+        headers={"WWW-Authenticate": "Bearer"},
+    )
+    if credentials is None:
+        raise unauthorized
+    user_id = auth.decode_token(credentials.credentials)
+    if user_id is None:
+        raise unauthorized
+    user = repo.get_user(user_id)
+    if user is None:
+        raise unauthorized
+    return user
+
+
+def get_owned_project(
+    project_id: str,
+    user: UserRecord = Depends(get_current_user),
+    repo: Repository = Depends(get_repo),
+) -> ProjectRecord:
+    """Row-level authorization (PRD §7): non-owners get 404, not 403."""
+    project = repo.get_project(project_id)
+    if project is None or project.owner_id != user.id:
+        raise HTTPException(status_code=404, detail="Project not found")
+    return project
