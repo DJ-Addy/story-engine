@@ -53,6 +53,9 @@ class AttributedLine(BaseModel):
     kind: str  # narration|dialogue|action|parenthetical|transition
     text: str
     character_name: str | None = None
+    # Delivery emotion for TTS, from a preceding parenthetical or a manual edit
+    # (one of app.nlp.emotion.EMOTIONS, or None for neutral).
+    emotion: str | None = None
     attribution_confidence: float | None = None
     attribution_source: str | None = None  # cue|tag|booknlp|llm|manual
 

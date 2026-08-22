@@ -50,6 +50,16 @@ class ShotListRecord(BaseModel):
     shotlist: SceneShotList
 
 
+class AudioRenderRecord(BaseModel):
+    id: str
+    project_id: str
+    scene_ordinal: int
+    wav_bytes: bytes
+    duration_ms: int
+    clip_count: int
+    ambience_tags: list[str]
+
+
 class FindingRecord(BaseModel):
     id: str
     project_id: str
@@ -107,6 +117,20 @@ class Repository(Protocol):
         self, finding_id: str, deliberate: bool, deliberate_note: str | None
     ) -> FindingRecord | None: ...
 
+    # -- audio renders ---------------------------------------------------------
+    def save_audio_render(
+        self,
+        project_id: str,
+        scene_ordinal: int,
+        wav_bytes: bytes,
+        duration_ms: int,
+        clip_count: int,
+        ambience_tags: list[str],
+    ) -> AudioRenderRecord: ...
+    def get_audio_render(
+        self, project_id: str, scene_ordinal: int
+    ) -> AudioRenderRecord | None: ...
+
 
 class InMemoryRepository:
     """Dict-backed repository keyed by uuid4 strings."""
@@ -119,6 +143,8 @@ class InMemoryRepository:
         self._scripts_by_project: dict[str, ScriptRecord] = {}
         self._shotlists: dict[tuple[str, int], ShotListRecord] = {}
         self._findings: dict[str, FindingRecord] = {}
+        # One (latest) render per (project, scene).
+        self._audio_renders: dict[tuple[str, int], AudioRenderRecord] = {}
 
     # -- users -------------------------------------------------------------
     def create_user(self, email: str, password_hash: str, salt: str) -> UserRecord:
@@ -249,3 +275,30 @@ class InMemoryRepository:
         finding.deliberate = deliberate
         finding.deliberate_note = deliberate_note
         return finding
+
+    # -- audio renders ---------------------------------------------------------
+    def save_audio_render(
+        self,
+        project_id: str,
+        scene_ordinal: int,
+        wav_bytes: bytes,
+        duration_ms: int,
+        clip_count: int,
+        ambience_tags: list[str],
+    ) -> AudioRenderRecord:
+        record = AudioRenderRecord(
+            id=str(uuid4()),
+            project_id=project_id,
+            scene_ordinal=scene_ordinal,
+            wav_bytes=wav_bytes,
+            duration_ms=duration_ms,
+            clip_count=clip_count,
+            ambience_tags=list(ambience_tags),
+        )
+        self._audio_renders[(project_id, scene_ordinal)] = record
+        return record
+
+    def get_audio_render(
+        self, project_id: str, scene_ordinal: int
+    ) -> AudioRenderRecord | None:
+        return self._audio_renders.get((project_id, scene_ordinal))

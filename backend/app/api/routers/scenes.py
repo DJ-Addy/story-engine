@@ -6,17 +6,55 @@ generator is a separate module and will feed the same endpoint contract.
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Response
 
-from app.api.deps import get_owned_project, get_repo
+from app.adapters.base import TTSProvider
+from app.api.deps import get_owned_project, get_repo, get_tts
 from app.api.repo import FindingRecord, ProjectRecord, Repository
-from app.api.schemas import FindingOut, FindingPatch, ShotListOut
+from app.api.schemas import AudioRenderOut, FindingOut, FindingPatch, ShotListOut
 from app.continuity.model import Finding, SceneContext, ShotMeta
 from app.continuity.validator import validate_scene
+from app.costs import governor
 from app.ingest.elements import NormalizedScene, StoryGraph
+from app.render.audio.pipeline import render_scene_audio
 from app.shotlist.schema import SceneShotList
 
 router = APIRouter(prefix="/projects/{project_id}/scenes/{ordinal}", tags=["scenes"])
+
+# Rendered lines mirror app.render.audio.pipeline's own spoken-line filter so
+# the pre-flight cost estimate matches what actually gets synthesized.
+_SPOKEN_KINDS = {"dialogue", "action", "narration"}
+
+_NARRATOR_VOICE = "en-US-GuyNeural"
+_SPEAKER_VOICE_POOL = [
+    "en-US-JennyNeural",
+    "en-US-AriaNeural",
+    "en-GB-RyanNeural",
+    "en-GB-SoniaNeural",
+    "en-US-ChristopherNeural",
+]
+
+
+def _estimate_cost_cents(scene: NormalizedScene, tts: TTSProvider) -> int:
+    return sum(
+        tts.estimate_cost_cents(line.text)
+        for line in scene.lines
+        if line.kind in _SPOKEN_KINDS and line.text.strip()
+    )
+
+
+def _voice_map(scene: NormalizedScene) -> dict[str | None, str]:
+    speakers = sorted(
+        {
+            line.character_name
+            for line in scene.lines
+            if line.kind == "dialogue" and line.character_name
+        }
+    )
+    voice_map: dict[str | None, str] = {None: _NARRATOR_VOICE}
+    for index, speaker in enumerate(speakers):
+        voice_map[speaker] = _SPEAKER_VOICE_POOL[index % len(_SPEAKER_VOICE_POOL)]
+    return voice_map
 
 
 def _get_scene_or_404(
@@ -135,3 +173,62 @@ def patch_finding(
     updated = repo.update_finding(finding_id, patch.deliberate, patch.deliberate_note)
     assert updated is not None
     return _finding_out(updated)
+
+
+@router.post("/render/audio", response_model=AudioRenderOut, status_code=201)
+async def render_audio(
+    ordinal: int,
+    project: ProjectRecord = Depends(get_owned_project),
+    repo: Repository = Depends(get_repo),
+    tts: TTSProvider = Depends(get_tts),
+) -> AudioRenderOut:
+    # PRD rights gate: nothing renders without an attestation on file.
+    if not project.rights_attested:
+        raise HTTPException(
+            status_code=403,
+            detail="Rights not attested for this project; cannot render audio",
+        )
+    _, scene = _get_scene_or_404(repo, project.id, ordinal)
+
+    estimated_cents = _estimate_cost_cents(scene, tts)
+    try:
+        governor.guard(project.cost_spent_cents, project.cost_cap_cents, estimated_cents)
+    except governor.CostCapExceeded as exc:
+        raise HTTPException(
+            status_code=402,
+            detail=(
+                f"Cost cap exceeded: spent {exc.spent}c + estimated {exc.requested}c "
+                f"would exceed cap {exc.cap}c"
+            ),
+        ) from exc
+
+    result = await render_scene_audio(scene, _voice_map(scene), tts)
+    project.cost_spent_cents += estimated_cents
+    repo.save_audio_render(
+        project.id,
+        ordinal,
+        wav_bytes=result.wav_bytes,
+        duration_ms=result.duration_ms,
+        clip_count=result.clip_count,
+        ambience_tags=result.ambience_tags,
+    )
+    return AudioRenderOut(
+        scene_ordinal=ordinal,
+        duration_ms=result.duration_ms,
+        clip_count=result.clip_count,
+        ambience_tags=result.ambience_tags,
+    )
+
+
+@router.get("/audio")
+def get_audio(
+    ordinal: int,
+    project: ProjectRecord = Depends(get_owned_project),
+    repo: Repository = Depends(get_repo),
+) -> Response:
+    record = repo.get_audio_render(project.id, ordinal)
+    if record is None:
+        raise HTTPException(
+            status_code=404, detail=f"No audio rendered yet for scene {ordinal}"
+        )
+    return Response(content=record.wav_bytes, media_type="audio/wav")

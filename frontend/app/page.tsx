@@ -1,39 +1,58 @@
 import Link from "next/link";
+import SmoothScroll from "@/components/landing/SmoothScroll";
+import Hero from "@/components/landing/Hero";
+import PipelineStory from "@/components/landing/PipelineStory";
+import FeatureGrid from "@/components/landing/FeatureGrid";
+import NumbersStrip from "@/components/landing/NumbersStrip";
+import FooterCta from "@/components/landing/FooterCta";
+
+const FOCUS_RING =
+  "focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-amber-400 focus-visible:ring-offset-2 focus-visible:ring-offset-zinc-950";
 
 export default function Home() {
   return (
-    <div className="flex flex-col flex-1 min-h-screen bg-zinc-950 text-zinc-200">
-      <header className="border-b border-zinc-800 px-6 py-3 flex items-center gap-3">
-        <h1 className="text-sm font-semibold tracking-wide">Story Engine</h1>
-        <span className="font-mono text-[10px] px-1.5 py-0.5 rounded border border-zinc-800 text-zinc-500">
-          v0.1 · mock data
-        </span>
-      </header>
-      <main className="flex-1 px-6 py-8 max-w-2xl">
-        <p className="text-sm text-zinc-400 mb-6">
-          Screenplay-to-audiobook and previz pipeline. Shot lists are validated
-          by the deterministic continuity checker; edit coverage below.
-        </p>
-        <h2 className="text-xs font-semibold uppercase tracking-wider text-zinc-500 mb-2">
-          Scenes
-        </h2>
-        <Link
-          href="/scenes/demo"
-          className="block border border-zinc-800 rounded-md bg-zinc-900/50 px-4 py-3 hover:border-zinc-600 transition-colors"
-        >
-          <div className="flex items-center justify-between">
-            <span className="font-mono text-xs text-zinc-200">
-              INT. THE GILDED TANKARD — NIGHT
-            </span>
-            <span className="font-mono text-[10px] text-zinc-500">
-              10 shots · classical
-            </span>
+    <SmoothScroll>
+      <div className="flex min-h-screen flex-1 flex-col bg-zinc-950 text-zinc-200">
+        <header className="absolute inset-x-0 top-0 z-20">
+          <div className="mx-auto flex max-w-6xl items-center justify-between px-6 py-5">
+            <div className="flex items-center gap-3">
+              <span className="text-sm font-semibold tracking-wide text-zinc-100">
+                Story Engine
+              </span>
+              <span className="rounded border border-zinc-700/70 bg-zinc-950/40 px-1.5 py-0.5 font-mono text-[10px] text-zinc-400">
+                v0.1
+              </span>
+            </div>
+            <nav aria-label="Primary">
+              <ul className="flex items-center gap-6 text-xs text-zinc-300">
+                <li>
+                  <a
+                    href="#pipeline"
+                    className={`rounded-sm transition-colors hover:text-zinc-50 ${FOCUS_RING}`}
+                  >
+                    Pipeline
+                  </a>
+                </li>
+                <li>
+                  <Link
+                    href="/scenes/demo"
+                    className={`rounded-sm transition-colors hover:text-zinc-50 ${FOCUS_RING}`}
+                  >
+                    Demo
+                  </Link>
+                </li>
+              </ul>
+            </nav>
           </div>
-          <p className="mt-1 text-[11px] text-zinc-500">
-            Two-character dialogue · demo scene workspace
-          </p>
-        </Link>
-      </main>
-    </div>
+        </header>
+        <main className="flex-1">
+          <Hero />
+          <PipelineStory />
+          <FeatureGrid />
+          <NumbersStrip />
+        </main>
+        <FooterCta />
+      </div>
+    </SmoothScroll>
   );
 }

@@ -192,6 +192,71 @@ class TestCharacters:
         assert by_name == {"MARA": 3, "TOM": 1}
 
 
+class TestEmotion:
+    def test_emotional_parenthetical_carries_to_dialogue(self) -> None:
+        graph = normalize(
+            [
+                slug("INT. OFFICE - DAY"),
+                cue("MARA"),
+                paren("(angrily)"),
+                dialogue("Get out."),
+            ]
+        )
+        paren_line, dialogue_line = graph.scenes[0].lines
+        assert paren_line.kind == "parenthetical"
+        assert paren_line.emotion == "angry"
+        assert dialogue_line.kind == "dialogue"
+        assert dialogue_line.emotion == "angry"
+
+    def test_non_emotional_parenthetical_leaves_dialogue_neutral(self) -> None:
+        graph = normalize(
+            [
+                slug("INT. OFFICE - DAY"),
+                cue("MARA"),
+                paren("(beat)"),
+                dialogue("Get out."),
+            ]
+        )
+        paren_line, dialogue_line = graph.scenes[0].lines
+        assert paren_line.emotion is None
+        assert dialogue_line.emotion is None
+
+    def test_emotion_resets_on_new_cue(self) -> None:
+        graph = normalize(
+            [
+                slug("INT. OFFICE - DAY"),
+                cue("MARA"),
+                paren("(angrily)"),
+                dialogue("Get out."),
+                cue("TOM"),
+                dialogue("Calm down."),
+            ]
+        )
+        dialogue_lines = [
+            line for line in graph.scenes[0].lines if line.kind == "dialogue"
+        ]
+        assert dialogue_lines[0].emotion == "angry"
+        assert dialogue_lines[1].emotion is None
+
+    def test_emotion_resets_after_action_line(self) -> None:
+        graph = normalize(
+            [
+                slug("INT. OFFICE - DAY"),
+                cue("MARA"),
+                paren("(angrily)"),
+                dialogue("Get out."),
+                action("She storms off."),
+                cue("MARA", "CONT'D"),
+                dialogue("Wait."),
+            ]
+        )
+        dialogue_lines = [
+            line for line in graph.scenes[0].lines if line.kind == "dialogue"
+        ]
+        assert dialogue_lines[0].emotion == "angry"
+        assert dialogue_lines[1].emotion is None
+
+
 class TestFountainIntegration:
     def test_sample_fountain_normalizes_end_to_end(
         self, sample_fountain: str

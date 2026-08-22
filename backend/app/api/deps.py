@@ -5,6 +5,7 @@ from __future__ import annotations
 from fastapi import Depends, HTTPException
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
+from app.adapters.base import TTSProvider
 from app.api import auth
 from app.api.repo import InMemoryRepository, ProjectRecord, Repository, UserRecord
 
@@ -17,6 +18,16 @@ _bearer = HTTPBearer(auto_error=False)
 
 def get_repo() -> Repository:
     return _repo
+
+
+def get_tts() -> TTSProvider:
+    """Default TTS provider. Imported lazily so offline test collection never
+    pulls in the edge-tts/aiohttp network stack; tests always override this
+    with app.adapters.fake.FakeTTS via app.dependency_overrides.
+    """
+    from app.adapters.edge import EdgeTTSAdapter
+
+    return EdgeTTSAdapter()
 
 
 def get_current_user(

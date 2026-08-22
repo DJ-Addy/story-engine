@@ -16,6 +16,7 @@ from app.ingest.elements import (
     RawElement,
     StoryGraph,
 )
+from app.nlp.emotion import emotion_from_parenthetical
 
 _INTERIOR_PREFIXES: list[tuple[str, bool | None]] = [
     ("INT./EXT.", None),
@@ -81,9 +82,14 @@ def _build_scene(
 
     lines: list[AttributedLine] = []
     speaker: str | None = None
+    # Emotion from the most recent parenthetical in the current speech block;
+    # governs the dialogue line(s) that follow it, until the cue changes or
+    # we leave the speech block entirely (action/transition/unknown).
+    pending_emotion: str | None = None
     for element in body:
         if element.kind is ElementKind.CHARACTER_CUE:
             speaker = _canonical_name(element)
+            pending_emotion = None
             characters.setdefault(
                 speaker, NormalizedCharacter(canonical_name=speaker)
             )
@@ -94,13 +100,25 @@ def _build_scene(
         kind = _LINE_KINDS[element.kind]
         if kind not in _SPEAKER_LINE_KINDS:
             speaker = None
+            pending_emotion = None
         name = speaker if kind in _SPEAKER_LINE_KINDS else None
+
+        emotion: str | None = None
+        if kind == "parenthetical":
+            resolved = emotion_from_parenthetical(element.text)
+            if resolved is not None:
+                pending_emotion = resolved
+            emotion = resolved
+        elif kind == "dialogue":
+            emotion = pending_emotion
+
         lines.append(
             AttributedLine(
                 ordinal=len(lines) + 1,
                 kind=kind,
                 text=element.text,
                 character_name=name,
+                emotion=emotion,
                 attribution_confidence=1.0 if name else None,
                 attribution_source="cue" if name else None,
             )

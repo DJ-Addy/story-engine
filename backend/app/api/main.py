@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from fastapi import APIRouter, FastAPI
 
-from app.api.routers import auth, projects, scenes, scripts
+from app.api.routers import auth, novel, projects, scenes, scripts
 
 
 def create_app() -> FastAPI:
@@ -19,6 +19,7 @@ def create_app() -> FastAPI:
     api.include_router(auth.router)
     api.include_router(projects.router)
     api.include_router(scripts.router)
+    api.include_router(novel.router)
     api.include_router(scenes.router)
 
     app.include_router(api)

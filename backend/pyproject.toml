@@ -17,6 +17,9 @@ dependencies = [
     "pyjwt>=2.8",
     "pdfplumber>=0.11",
     "python-multipart>=0.0.9",
+    "edge-tts>=6.1",
+    "numpy>=1.26",
+    "soundfile>=0.12",
 ]
 
 [project.optional-dependencies]
@@ -32,6 +35,10 @@ include = ["app*"]
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"
+markers = [
+    "network: tests that hit the real network (deselected by default)",
+]
+addopts = "-m 'not network'"
 
 [tool.ruff]
 line-length = 100

@@ -58,6 +58,37 @@ class ScriptUploadOut(BaseModel):
     character_count: int
 
 
+class NovelIngestOut(BaseModel):
+    """Response for POST .../novel: persisted-script stats plus the novel
+    conversion's own attribution stats (PRD phase 2)."""
+
+    script_id: str
+    scene_count: int
+    character_count: int
+    quotes: int
+    attributed: int
+    needs_review: int
+    characters: list[str]
+
+
+class NovelPreviewOut(BaseModel):
+    """Response for POST .../novel/preview: conversion stats plus the
+    generated Fountain text, without persisting anything."""
+
+    quotes: int
+    attributed: int
+    needs_review: int
+    characters: list[str]
+    fountain_text: str
+
+
+class AudioRenderOut(BaseModel):
+    scene_ordinal: int
+    duration_ms: int
+    clip_count: int
+    ambience_tags: list[str]
+
+
 class StoryGraphOut(StoryGraph):
     """Response model for GET .../graph; identical shape to the ingest model."""
 
