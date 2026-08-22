@@ -1,87 +1,99 @@
 # Story Engine — Build Handoff
 
-**Date:** 2026-08-22
-**Session summary:** Greenfield build session. The workspace started empty; six parallel
-agents built the core backend modules test-first. Everything below is authored but
-**unverified by pytest** — the shell in this Cursor session was broken (commands returned
-no output, for the main agent and all subagents), so no installs or test runs could execute.
+**Date:** 2026-08-22 (updated end of session)
+**Session summary:** Greenfield build. Eleven parallel agents built the backend core,
+API layer, and first frontend workspace, all test-driven. **367 backend tests pass**
+(verified by pytest) and the frontend **builds clean** (`tsc --noEmit` + `next build`).
+Three commits on `main`: `91db95e` (core), `d9220e8` (API/workers/generation), `48cb962` (frontend).
 
 **Source docs:** `C:\Users\Adam\Downloads\PRD.md` and `C:\Users\Adam\Downloads\HANDOFF.md`
-(the product handoff). Consider copying both into this repo.
+(product handoff). Consider copying both into the repo.
+
+**Environment note:** the Cursor sandbox cannot enforce filesystem isolation on this
+machine, so shell commands only run with full ("all") permissions. If a future session
+sees commands hang with no output, that is the cause — request full permissions.
 
 ---
 
-## 1. FIRST ACTIONS NEXT SESSION (do these before anything else)
-
-Restart Cursor (or the machine) so the shell works again, then:
+## 1. How to run everything
 
 ```powershell
+# Backend tests (venv already exists at backend/.venv)
 cd "C:\Users\Adam\Desktop\Audiobooks from llms\backend"
-python -m venv .venv
-.venv\Scripts\Activate.ps1
-pip install -e ".[dev]"
-python -m pytest -v
+.\.venv\Scripts\python.exe -m pytest -q          # expect: 367 passed
+
+# API server (in-memory repo — no DB needed yet)
+.\.venv\Scripts\python.exe -m uvicorn app.api.main:create_app --factory --reload
+
+# Frontend (Next.js 16.3.2, App Router)
+cd ..\frontend
+npm run dev                                       # then open /scenes/demo
 ```
 
-Expected: ~115 tests across 13 test files. All code was hand-traced by its authoring
-agent but never machine-run, so expect a handful of small failures (typos, Pydantic v2
-API details). Fix failures before writing any new code — that completes the red/green
-loop the TDD process started.
-
-Then `git init` and make the first commit (git was never run; there is no repo yet).
-
----
-
-## 2. Where we are in the PRD
-
-PRD milestones (§8):
+## 2. Where we are in the PRD (milestones §8)
 
 | Milestone | Status |
 |---|---|
-| M0 Validation (manual, human) | NOT DONE — requires the founder to run 3 scripts past 5 directors + 5 authors (product HANDOFF §11). Engineering proceeded in parallel by explicit user request. |
-| M1 Skeleton (auth, projects, upload, Fountain+FDX parse, story graph persisted) | **~60% — this session's work.** Parsing, normalization, story graph model, and full DB schema are built. Missing: FastAPI app itself, auth, upload flow, wiring parse→DB. |
-| M2 Audio | Logic layer built (timing, mix graphs, duration heuristics). Missing: real TTS adapters, workers, timeline UI. |
-| M3 Shot list | Contract + validator built (schema, coverage, repair, all 6 continuity rules, grammar profiles). Missing: LLM prompt assembly + generation orchestration, editor UI, axis diagram. |
-| M4 Visual / M5 Animatic / M6 Hardening | Not started (adapters + cost governor foundations exist for M6). |
+| M0 Validation (human) | OPEN — founder must run 3 scripts past 5 directors + 5 authors (product HANDOFF §11). Engineering proceeded by explicit user request. |
+| M1 Skeleton | **DONE at the app layer.** Auth (JWT + PBKDF2), projects with rights attestation, script upload → Fountain/FDX parse → story graph, manual line correction. Runs on an in-memory repository; PostgreSQL persistence is wired in models/migrations but not yet connected to the API. |
+| M2 Audio | Logic complete + job orchestration (speech-bus timing, mix graphs, fan-out planning, cost estimation). Missing: real TTS adapters (ElevenLabs/Kokoro), actual worker execution against Redis, audio timeline UI. |
+| M3 Shot list | **Largely done.** Schema, generation orchestration with retry-feedback, coverage-gap regen, all 6 continuity rules, grammar profiles, API endpoints, and the UI (editor + panel + axis diagram, mock data). Missing: real LLM adapter, API↔UI wiring. |
+| M4 Visual | Prompt assembly + variant selection done. Missing: image provider adapters, generation workers, board grid UI. |
+| M5 Animatic | Assembly commands + manifest builder done. Missing: execution + player UI. |
+| M6 Hardening | Cost governor, retries, idempotency, partial-failure reconciliation, SSE contract all built and tested. Missing: OTel/Sentry, rate limiting. |
 
-## 3. What exists (all under `backend/`, Python 3.12, Pydantic v2)
+## 3. Repository map
 
-| Module | Files | Tests |
-|---|---|---|
-| Ingest | `app/ingest/elements.py` (shared IR contract), `fountain.py`, `fdx.py`, `normalize.py` | `test_fountain.py`, `test_fdx.py`, `test_normalize.py` + fixtures `tests/fixtures/sample.fountain`, `sample.fdx` |
-| Continuity | `app/continuity/model.py`, `registry.py`, `rules.py` (AXIS_CROSS, EYELINE_MISMATCH, NO_REVERSE, LENS_JUMP, SCREEN_DIRECTION_FLIP, TIME_OF_DAY_DRIFT), `profiles.py`, `validator.py` | `test_continuity.py` (23 tests) |
-| Shot list | `app/shotlist/schema.py` (ShotSpec/SceneShotList), `coverage.py` (gap-targeted regen), `repair.py` (never-raising LLM JSON parse) | 3 test files (27 tests) |
-| Audio | `app/render/audio/model.py`, `timing.py` (PRD gap table, largest-gap rule), `mix.py` (sidechain duck ffmpeg argv, 3 presets), `durations.py` (pre-audio shot duration heuristic) | 3 test files (30 tests) |
-| Adapters | `app/adapters/base.py` (protocols, error taxonomy, `classify_http_status`), `fake.py` (deterministic + failure injection), `registry.py` | `test_adapters.py` |
-| Costs | `app/costs/governor.py` (guard + CostLedger), `retry.py` (`run_with_retries`, `idempotency_key`) | `test_cost_governor.py`, `test_retry.py` |
-| DB | `app/db/base.py`, `models.py` (13 tables, native pg enums, **GiST exclusion constraint on character_variants** — the PRD's key integrity guarantee), `alembic/versions/0001_initial_schema.py` (hand-written, creates btree_gist) | `test_db_models.py` (metadata-only, no live DB needed) |
+```
+backend/  (Python 3.12, FastAPI, Pydantic v2 — 367 tests, all green)
+  app/ingest/      fountain.py, fdx.py, pdf_screenplay.py (modal-margin indent classifier),
+                   normalize.py (cue attribution conf 1.0), elements.py (shared IR contract)
+  app/nlp/         ambience.py (rule-based scene -> ambience tags)
+  app/continuity/  6 rules, registry, grammar profiles, validator (pure/deterministic)
+  app/shotlist/    schema.py, coverage.py (gap-only regen), repair.py, generate.py
+                   (LLM prompt contract + retry-with-error-feedback)
+  app/render/      audio/ (gap-table timing, sidechain mix argv, duration heuristics),
+                   visual/ (board + charsheet prompts, variant_for), animatic.py
+  app/adapters/    protocols, error taxonomy, deterministic fakes, registry
+                   (LAW: no provider SDK outside this package)
+  app/costs/       governor (cap guard, ledger), retry + idempotency_key
+  app/workers/     plan.py (fan-out/fan-in JobSpec), events.py (SSE contract), tasks.py (arq)
+  app/api/         FastAPI app factory, JWT auth, repo protocol + InMemoryRepository,
+                   routers (auth/projects/scripts/scenes), /api/v1 prefix
+  app/db/          SQLAlchemy models (13 tables, gist exclusion constraint) + Alembic 0001
+frontend/  (Next.js 16, TS, Tailwind v4, zustand — builds clean)
+  lib/             types.ts (backend contract), continuity.ts (client mirror of
+                   AXIS_CROSS + LENS_JUMP for optimistic feedback), store.ts, api.ts
+                   (MockApi behind StoryEngineApi interface), mock.ts
+  components/      ShotListEditor (dense table, arrows/Enter/Tab/Escape), ContinuityPanel
+                   (grouped findings, mark-deliberate, strict/silent), AxisDiagram (SVG)
+  app/scenes/demo  the scene workspace
+```
 
-Repo root: `README.md`, `.gitignore`, `.env.example`, `backend/pyproject.toml`.
+## 4. Architectural invariants (do not violate)
 
-## 4. Architectural invariants already encoded (do not violate)
-
-- No provider SDK imported outside `app/adapters/`. Tests use fakes only — never spend credits in tests.
-- Cost governor `guard()` runs before any job enqueues; adapters report `cost_cents` on every result.
-- Terminal provider errors (400/403/422/content-policy) are NEVER retried; 429/5xx are.
+- No provider SDK imported outside `app/adapters/`. Tests use fakes; never spend credits in tests.
+- Cost governor `guard()` before any enqueue; adapters report `cost_cents`; caps also set provider-side.
+- Terminal errors (400/403/422/policy) never retried; 429/5xx retried with backoff.
 - Parsers emit flat `RawElement` lists; only `normalize.py` builds scenes/characters.
-- Screenplay dialogue attribution comes from character cues at confidence 1.0, source `"cue"`.
-- Continuity findings warn, never block ("Mark as deliberate" model).
-- Character variants cannot overlap in scene range (DB-level exclusion constraint).
+- Screenplay attribution from cues = confidence 1.0, source `"cue"`.
+- Continuity warns, never blocks (mark-as-deliberate); `validator_mode` filters severity (strict=all, lenient=no info, off=skip).
+- Character variants cannot overlap (DB gist constraint; `variant_for` mirrors it in memory).
+- Frontend data access only through `lib/api.ts`; UI state in zustand; optimistic findings reconcile against server findings by (rule, ordinal).
 
-## 5. Next build steps, in order
+## 5. Next steps, in order
 
-1. **Fix any test failures** from the first pytest run (see §1).
-2. **Finish M1:** FastAPI app factory + routes from PRD §5.4 (`POST /projects`, script upload with `rights_attested` enforcement, `GET /projects/{id}/graph`, `PATCH /lines/{id}`); session/JWT auth; wire `parse_fountain`/`parse_fdx` → `normalize` → SQLAlchemy persistence. Needs Postgres 16 (docker: `docker run -d -p 5432:5432 -e POSTGRES_PASSWORD=postgres postgres:16`), then `alembic upgrade head`.
-3. **PDF screenplay parser** (`app/ingest/pdf_screenplay.py`): pdfplumber + indent-band classifier per PRD §4.2, with modal-x0 margin calibration. Add `pdfplumber` to pyproject.
-4. **M2 audio pipeline:** arq worker tasks (fan-out tts_line × N → ambience → mix barrier per PRD §5.2), ElevenLabs + Kokoro adapters behind the existing protocols, SSE progress endpoint.
-5. **M3 generation:** prompt assembly for shot lists (scene text + character list + grammar profile + previous scene's last shot), max-2-retry orchestration around the existing `parse_llm_shotlist`.
-6. **Frontend:** Next.js 15 scaffold (`npx create-next-app@latest frontend`), then the five core components in PRD §6.2 — start with Shot List Editor + Continuity Panel.
+1. **Wire Postgres:** implement `SqlAlchemyRepository` against the existing models + `alembic upgrade head`; keep `InMemoryRepository` for tests. Needs a local Postgres 16 (`docker run -d -p 5432:5432 -e POSTGRES_PASSWORD=postgres postgres:16`).
+2. **First real adapters:** one TTS (ElevenLabs or self-hosted Kokoro) and one LLM (Anthropic) implementing the existing protocols; env keys via `.env` (see `.env.example`); set provider-side spend caps first (product HANDOFF risk #5).
+3. **Worker execution:** Redis + arq runner for the planned jobs; SSE endpoint streaming `app/workers/events.py` payloads; then an end-to-end scene audio render.
+4. **Frontend wiring:** replace `MockApi` with a fetch client against `/api/v1`; add upload + project pages; then the audio timeline (wavesurfer.js) per PRD §6.2 #4.
+5. **PDF ingest end-to-end test** with a real screenplay PDF fixture through `extract_word_boxes`.
+6. **M0 validation** remains a human task and gates go-to-market, not engineering.
 
-## 6. Known issues / decisions made this session
+## 6. Known issues / notes
 
-- The whole suite is unverified (broken shell). Treat the first pytest run as the real TDD "red" phase.
-- `tests/conftest.py` has a `sys.path` guard inserting `backend/` so `import app` works even without `pip install -e .`.
-- `mix.py` loop-extension uses `-stream_loop` with ceil math; equal-power crossfade looping (PRD §4.5) is a noted TODO refinement.
-- No git history exists — this session could not run git.
-- Frontend not started (couldn't run npm; nothing hand-written to avoid an unbuildable half-scaffold).
-- M0 validation gate (product HANDOFF §11) remains open — engineering was explicitly requested to proceed anyway.
+- `app/api` uses an in-memory repo; data does not survive restarts yet (by design until step 1).
+- Loop-extension in `mix.py` uses `-stream_loop` + ceil math; equal-power crossfade looping is a noted refinement.
+- Dev JWT secret defaults to `dev-secret-change-me`; set `STORY_ENGINE_SECRET` in any deployed environment.
+- `create-next-app` produced Next.js 16.3.2 (PRD says 15 — newer, no issues).
+- Node 20.12.1 triggers benign `EBADENGINE` warnings from eslint deps; upgrading Node to ≥20.19 silences them.
