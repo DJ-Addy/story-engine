@@ -1,0 +1,56 @@
+<?xml version="1.0" encoding="UTF-8" standalone="no" ?>
+<FinalDraft DocumentType="Script" Template="No" Version="5">
+  <Content>
+    <Paragraph Type="Scene Heading">
+      <Text>EXT. HARBOR TOWN - NIGHT</Text>
+    </Paragraph>
+    <Paragraph Type="Action">
+      <Text>Rain hammers the cobblestones. A lone figure, MARA (30s, oilskin coat), hurries toward the lighthouse.</Text>
+    </Paragraph>
+    <Paragraph Type="Character">
+      <Text>MARA</Text>
+    </Paragraph>
+    <Paragraph Type="Parenthetical">
+      <Text>(under her breath)</Text>
+    </Paragraph>
+    <Paragraph Type="Dialogue">
+      <Text>Of all the nights, Tom. Of all the nights.</Text>
+    </Paragraph>
+    <Paragraph Type="Scene Heading">
+      <Text>INT. LIGHTHOUSE - KEEPER'S ROOM - NIGHT</Text>
+    </Paragraph>
+    <Paragraph Type="Action">
+      <Text>TOM GRADY (60s, keeper) opens the door. Wind and rain burst in with Mara.</Text>
+    </Paragraph>
+    <Paragraph Type="Character">
+      <Text>TOM</Text>
+    </Paragraph>
+    <Paragraph Type="Dialogue">
+      <Text>You shouldn't be out in this.</Text>
+    </Paragraph>
+    <Paragraph Type="Character">
+      <Text>MARA</Text>
+    </Paragraph>
+    <Paragraph Type="Dialogue">
+      <Text>The Peregrine's off the shoals. Nobody's lit the south beacon.</Text>
+    </Paragraph>
+    <Paragraph Type="Character">
+      <Text>TOM (CONT'D)</Text>
+    </Paragraph>
+    <Paragraph Type="Dialogue">
+      <Text>Fetch the oil from the cellar. Go.</Text>
+    </Paragraph>
+    <Paragraph Type="Transition">
+      <Text>CUT TO:</Text>
+    </Paragraph>
+    <Paragraph Type="Scene Heading">
+      <Text>EXT. LIGHTHOUSE - CLIFF PATH - NIGHT</Text>
+    </Paragraph>
+    <Paragraph Type="Character">
+      <Text>MARA (V.O.)</Text>
+    </Paragraph>
+    <Paragraph Type="Dialogue">
+      <Text>My father always said the sea takes what it's owed.</Text>
+    </Paragraph>
+  </Content>
+</FinalDraft>
