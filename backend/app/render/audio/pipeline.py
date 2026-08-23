@@ -17,7 +17,8 @@ from app.adapters.base import TTSProvider, TTSResult
 from app.costs.retry import run_with_retries
 from app.ingest.elements import NormalizedScene
 from app.nlp.ambience import ambience_tags
-from app.render.audio import dsp
+from app.nlp.sound_events import detect_sound_events
+from app.render.audio import dsp, sfx
 from app.render.audio.model import SpeechClip
 from app.render.audio.timing import plan_speech_bus
 
@@ -26,6 +27,9 @@ _AMBIENCE_BASE_S = 20.0  # synth this much bed, then loop to scene length
 _TAIL_MS = 1200  # let the ambience breathe after the last line
 
 _SPOKEN_KINDS = {"dialogue", "action", "narration"}
+# Lines whose description can trigger a foreground sound event.
+_EVENT_KINDS = {"action", "narration"}
+_SFX_GAIN = 0.6  # foreground SFX level before the final loudness/limit stage
 
 
 class SceneRenderResult(BaseModel):
@@ -35,6 +39,40 @@ class SceneRenderResult(BaseModel):
     duration_ms: int
     clip_count: int
     ambience_tags: list[str]
+    sfx_events: list[str] = []  # foreground SFX placed, in timeline order
+
+
+def _build_sfx_bus(
+    lines: list,
+    plan,
+    total_samples: int,
+    seed: int,
+    scene_ordinal: int,
+) -> tuple[np.ndarray, list[str]]:
+    """Place synthesized SFX for each action line at its narration time.
+
+    Events from one line are laid down back-to-back starting at that line's
+    clip onset, so the sound tracks the words describing it. Returns the SFX
+    bus and the ordered list of events placed (for reporting/tests).
+    """
+    bus = np.zeros(total_samples, dtype=np.float32)
+    placed: list[str] = []
+    rng = np.random.default_rng([seed, 0x5F_C0DE, scene_ordinal])
+    _gap = round(0.15 * dsp.SR)
+    for entry in plan.entries:
+        line = lines[entry.clip_index]
+        if line.kind not in _EVENT_KINDS:
+            continue
+        cursor = round(entry.start_ms * dsp.SR / 1000)
+        for event in detect_sound_events(line.text):
+            clip = _SFX_GAIN * sfx.synth_event(event, rng)
+            if cursor >= total_samples:
+                break
+            end = min(cursor + len(clip), total_samples)
+            bus[cursor:end] += clip[: end - cursor]
+            placed.append(event)
+            cursor = end + _gap
+    return bus, placed
 
 
 def _clip_samples(result: TTSResult) -> np.ndarray:
@@ -113,10 +151,13 @@ async def render_scene_audio(
     bed = dsp.synth_ambience(tags, min(total_ms / 1000.0, _AMBIENCE_BASE_S), seed)
     bed = dsp.loop_to_length(bed, total_samples)
 
-    mixed = dsp.mix_scene(speech_bus, bed)
+    sfx_bus, sfx_events = _build_sfx_bus(lines, plan, total_samples, seed, scene.ordinal)
+
+    mixed = dsp.mix_scene(speech_bus, bed, sfx_bus)
     return SceneRenderResult(
         wav_bytes=dsp.wav_bytes(mixed, dsp.SR),
         duration_ms=round(len(mixed) / dsp.SR * 1000),
         clip_count=len(clips),
         ambience_tags=tags,
+        sfx_events=sfx_events,
     )

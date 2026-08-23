@@ -409,15 +409,32 @@ def peak_limit(x: np.ndarray, ceiling: float = 0.98) -> np.ndarray:
     return (x * (ceiling / peak)).astype(np.float32)
 
 
-def mix_scene(speech_bus: np.ndarray, ambience_bed: np.ndarray) -> np.ndarray:
-    """Duck ambience under speech, sum, normalize, limit."""
-    n = max(len(speech_bus), len(ambience_bed))
+def mix_scene(
+    speech_bus: np.ndarray,
+    ambience_bed: np.ndarray,
+    sfx_bus: np.ndarray | None = None,
+) -> np.ndarray:
+    """Duck ambience under the foreground (speech + SFX), sum, normalize, limit.
+
+    Sound effects are foreground events: they sit alongside speech and the
+    ambience bed ducks under them too, so a thunder crack or a door slam
+    pushes the bed down the same way a spoken line does.
+    """
+    lengths = [len(speech_bus), len(ambience_bed)]
+    if sfx_bus is not None:
+        lengths.append(len(sfx_bus))
+    n = max(lengths)
+
     speech = np.zeros(n, dtype=np.float32)
     speech[: len(speech_bus)] = speech_bus
     ambience = np.zeros(n, dtype=np.float32)
     ambience[: len(ambience_bed)] = ambience_bed
+    foreground = speech
+    if sfx_bus is not None:
+        foreground = speech.copy()
+        foreground[: len(sfx_bus)] += sfx_bus
 
-    mixed = speech + duck(ambience, speech)
+    mixed = foreground + duck(ambience, foreground)
     return peak_limit(normalize_loudness(mixed))
 
 

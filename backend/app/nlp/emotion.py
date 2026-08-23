@@ -75,7 +75,9 @@ def emotion_from_parenthetical(text: str) -> str | None:
     for emotion, keywords in _EMOTION_KEYWORDS.items():
         for keyword in keywords:
             if " " in keyword:
-                if keyword in lowered:
+                # Multi-word idiom: all its words must appear, but interposed
+                # words are fine ("under breath" matches "under her breath").
+                if all(word in tokens for word in keyword.split()):
                     return emotion
             elif keyword in tokens:
                 return emotion

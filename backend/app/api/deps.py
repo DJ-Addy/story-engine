@@ -21,10 +21,21 @@ def get_repo() -> Repository:
 
 
 def get_tts() -> TTSProvider:
-    """Default TTS provider. Imported lazily so offline test collection never
-    pulls in the edge-tts/aiohttp network stack; tests always override this
-    with app.adapters.fake.FakeTTS via app.dependency_overrides.
+    """Default TTS provider, selected from the environment.
+
+    With AZURE_SPEECH_KEY + AZURE_SPEECH_REGION set, use the Azure neural
+    adapter (real emotion via SSML express-as); otherwise fall back to the
+    free, keyless Edge adapter. Imported lazily so offline test collection
+    never pulls in the aiohttp network stack; tests always override this with
+    app.adapters.fake.FakeTTS via app.dependency_overrides.
     """
+    import os
+
+    if os.environ.get("AZURE_SPEECH_KEY") and os.environ.get("AZURE_SPEECH_REGION"):
+        from app.adapters.azure_tts import AzureTTSAdapter
+
+        return AzureTTSAdapter()
+
     from app.adapters.edge import EdgeTTSAdapter
 
     return EdgeTTSAdapter()

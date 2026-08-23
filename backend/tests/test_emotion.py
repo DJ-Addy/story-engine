@@ -61,3 +61,9 @@ def test_case_and_punctuation_insensitive() -> None:
 
 def test_multi_word_cue_phrase() -> None:
     assert emotion_from_parenthetical("(under breath)") == "whispering"
+
+
+def test_multi_word_cue_tolerates_interposed_words() -> None:
+    # "under her breath" / "under his breath" still resolve to whispering.
+    assert emotion_from_parenthetical("(under her breath)") == "whispering"
+    assert emotion_from_parenthetical("(muttering under his breath)") == "whispering"

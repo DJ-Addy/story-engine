@@ -75,11 +75,14 @@ export default function Hero() {
       aria-label="Story Engine introduction"
     >
       <div ref={backdropRef} className="absolute inset-0 will-change-transform">
-        {/* Decorative SVG (not next/image — Next blocks SVG unless dangerouslyAllowSVG). */}
+        {/* Rendered hero graphic. Plain <img> for a full-bleed backdrop: this
+            Next build's Image API differs from stable, so a static <img> keeps
+            the decorative backdrop off that surface. */}
         <img
-          src="/hero-story-graph.svg"
+          src="/hero-story-graph.png"
           alt="A projector beam illuminating a constellation of story-graph nodes flowing into a strip of film"
           className="absolute inset-0 h-full w-full object-cover"
+          fetchPriority="high"
         />
         <div className="absolute inset-0 bg-gradient-to-t from-zinc-950 via-zinc-950/55 to-zinc-950/30" />
         <div className="absolute inset-x-0 bottom-0 h-2/5 bg-gradient-to-t from-zinc-950 to-transparent" />
