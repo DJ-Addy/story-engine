@@ -27,3 +27,336 @@ body {
     transform: scaleY(1);
   }
 }
+
+/* ===================================================================== */
+/* Casting Studio design tokens                                          */
+/* Additive layer over the Story Engine brand (zinc-950 base, amber/sky  */
+/* accents). Introduced as tokens so surfaces, score bands, and the      */
+/* emotion palette stay cohesive instead of scattered literals.          */
+/* ===================================================================== */
+:root {
+  /* Layered surfaces */
+  --cast-bg: #0a0a0b;
+  --surface-1: rgba(24, 24, 27, 0.72); /* panel */
+  --surface-2: rgba(32, 32, 37, 0.55); /* card */
+  --surface-3: rgba(46, 46, 52, 0.45); /* raised / control */
+  --hairline: rgba(255, 255, 255, 0.07);
+  --hairline-strong: rgba(255, 255, 255, 0.14);
+
+  /* Depth */
+  --shadow-card: inset 0 1px 0 0 rgba(255, 255, 255, 0.04),
+    0 10px 30px -18px rgba(0, 0, 0, 0.75);
+  --shadow-panel: inset 0 1px 0 0 rgba(255, 255, 255, 0.05),
+    0 30px 80px -42px rgba(0, 0, 0, 0.9);
+  --shadow-raised: inset 0 1px 0 0 rgba(255, 255, 255, 0.06),
+    0 20px 46px -22px rgba(0, 0, 0, 0.82);
+
+  /* Score bands — a tasteful scale: emerald -> amber -> rose */
+  --band-strong-a: #6ee7b7;
+  --band-strong-b: #10b981;
+  --band-strong: #6ee7b7;
+  --band-adequate-a: #fcd34d;
+  --band-adequate-b: #f59e0b;
+  --band-adequate: #fbbf24;
+  --band-poor-a: #fecdd3;
+  --band-poor-b: #f43f5e;
+  --band-poor: #fda4af;
+
+  /* Emotion accents — muted, cohesive, spread across the wheel so each of
+     the canonical delivery emotions reads distinct on the dark ground. */
+  --emotion-angry: 224 108 108;
+  --emotion-shouting: 227 133 86;
+  --emotion-urgent: 226 164 78;
+  --emotion-happy: 226 191 96;
+  --emotion-excited: 229 138 170;
+  --emotion-surprised: 198 146 214;
+  --emotion-sarcastic: 178 154 214;
+  --emotion-afraid: 158 141 214;
+  --emotion-whispering: 150 172 199;
+  --emotion-sad: 128 158 201;
+  --emotion-calm: 104 197 178;
+  --emotion-serious: 150 165 180;
+  --emotion-neutral: 161 161 170;
+
+  /* Leaderboard medals */
+  --medal-gold: 251 191 36;
+  --medal-silver: 212 212 216;
+  --medal-bronze: 205 127 80;
+}
+
+@layer components {
+  .cast-panel {
+    border-radius: 16px;
+    border: 1px solid var(--hairline);
+    background: linear-gradient(
+        180deg,
+        rgba(255, 255, 255, 0.025),
+        rgba(255, 255, 255, 0)
+      ),
+      var(--surface-1);
+    box-shadow: var(--shadow-panel);
+    backdrop-filter: blur(14px);
+  }
+
+  .cast-card {
+    border-radius: 12px;
+    border: 1px solid var(--hairline);
+    background: var(--surface-2);
+    box-shadow: var(--shadow-card);
+  }
+
+  .cast-hover {
+    transition: transform 0.25s ease, border-color 0.25s ease,
+      box-shadow 0.25s ease, background-color 0.25s ease;
+  }
+  .cast-hover:hover {
+    transform: translateY(-2px);
+    border-color: var(--hairline-strong);
+    box-shadow: var(--shadow-raised);
+  }
+
+  /* Emotion chip — color driven by an inline `--ec` custom property that
+     points at one of the --emotion-* tokens (see components/casting/theme). */
+  .emotion-chip {
+    color: rgb(var(--ec, var(--emotion-neutral)) / 0.96);
+    background-color: rgb(var(--ec, var(--emotion-neutral)) / 0.1);
+    border: 1px solid rgb(var(--ec, var(--emotion-neutral)) / 0.3);
+  }
+
+  .voice-pill {
+    color: rgb(125 211 252 / 0.96); /* sky-300 */
+    background-color: rgb(56 189 248 / 0.08);
+    border: 1px solid rgb(56 189 248 / 0.24);
+  }
+
+  /* Shimmer skeleton for loading states */
+  .cast-shimmer {
+    position: relative;
+    overflow: hidden;
+    background: var(--surface-2);
+  }
+  .cast-shimmer::after {
+    content: "";
+    position: absolute;
+    inset: 0;
+    transform: translateX(-100%);
+    background: linear-gradient(
+      90deg,
+      transparent,
+      rgba(255, 255, 255, 0.06),
+      transparent
+    );
+    animation: cast-shimmer 1.5s ease-in-out infinite;
+  }
+
+  /* Winner sheen — a slow highlight that sweeps the rank-1 card */
+  .winner-sheen::before {
+    content: "";
+    position: absolute;
+    inset: 0;
+    background: linear-gradient(
+      115deg,
+      transparent 34%,
+      rgba(251, 191, 36, 0.16) 50%,
+      transparent 66%
+    );
+    background-size: 240% 100%;
+    animation: winner-sheen 4s ease-in-out infinite;
+    pointer-events: none;
+  }
+}
+
+@keyframes cast-shimmer {
+  100% {
+    transform: translateX(100%);
+  }
+}
+@keyframes winner-sheen {
+  0% {
+    background-position: 180% 0;
+  }
+  100% {
+    background-position: -90% 0;
+  }
+}
+
+/* Refined thin scrollbar for any workstation overflow */
+.cast-scroll {
+  scrollbar-width: thin;
+  scrollbar-color: rgba(255, 255, 255, 0.14) transparent;
+}
+.cast-scroll::-webkit-scrollbar {
+  width: 8px;
+  height: 8px;
+}
+.cast-scroll::-webkit-scrollbar-thumb {
+  background: rgba(255, 255, 255, 0.12);
+  border-radius: 999px;
+}
+.cast-scroll::-webkit-scrollbar-thumb:hover {
+  background: rgba(255, 255, 255, 0.22);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .cast-hover:hover {
+    transform: none;
+  }
+  .cast-shimmer::after,
+  .winner-sheen::before {
+    animation: none;
+  }
+}
+
+/* ===================================================================== */
+/* Timeline editor design tokens + components                            */
+/* Additive layer over the Casting Studio tokens. Lane accents reuse the  */
+/* brand's sky/amber/teal/violet family (stored as space-separated RGB    */
+/* triples, like --emotion-*) so the timeline reads as the same product;  */
+/* clip / ruler / playhead surfaces build on --surface-* and --hairline.  */
+/* ===================================================================== */
+:root {
+  --tl-visual: 56 189 248; /* sky */
+  --tl-dialogue: 251 191 36; /* amber */
+  --tl-ambience: 104 197 178; /* teal (matches --emotion-calm) */
+  --tl-sfx: 198 146 214; /* violet */
+  --tl-playhead: 251 191 36; /* amber playhead */
+  --tl-grid-line: rgba(255, 255, 255, 0.05);
+}
+
+@layer components {
+  /* Cinematic backdrop for the timeline shell (echoes the casting hero). */
+  .tl-shell {
+    background:
+      radial-gradient(
+        ellipse 80% 60% at 12% -8%,
+        rgba(251, 191, 36, 0.06),
+        transparent 60%
+      ),
+      radial-gradient(
+        ellipse 70% 60% at 100% 0%,
+        rgba(56, 189, 248, 0.05),
+        transparent 60%
+      ),
+      var(--cast-bg);
+  }
+
+  .tl-lane-label {
+    border-bottom: 1px solid var(--hairline);
+    background: linear-gradient(180deg, rgba(255, 255, 255, 0.02), transparent);
+  }
+
+  /* Lane track — faint per-second gridlines aligned to the zoom via the
+     inline --tl-grid-step custom property (set to `${pxPerSecond}px`). */
+  .tl-lane-row {
+    border-bottom: 1px solid var(--hairline);
+    background-image: repeating-linear-gradient(
+      90deg,
+      var(--tl-grid-line) 0 1px,
+      transparent 1px var(--tl-grid-step, 80px)
+    );
+  }
+  .tl-lane-row:nth-child(even) {
+    background-color: rgba(255, 255, 255, 0.014);
+  }
+
+  /* A positioned clip. Accent comes from an inline --tl-accent triple that
+     points at one of the --tl-* / --emotion-* tokens. */
+  .tl-clip {
+    position: absolute;
+    border-radius: 8px;
+    border: 1px solid rgb(var(--tl-accent, 161 161 170) / 0.4);
+    background: linear-gradient(
+      180deg,
+      rgb(var(--tl-accent, 161 161 170) / 0.16),
+      rgb(var(--tl-accent, 161 161 170) / 0.05)
+    );
+    box-shadow: var(--shadow-card);
+    overflow: hidden;
+    cursor: pointer;
+    transition:
+      border-color 0.18s ease,
+      box-shadow 0.18s ease,
+      filter 0.18s ease;
+  }
+  .tl-clip:hover {
+    border-color: rgb(var(--tl-accent, 161 161 170) / 0.75);
+    box-shadow: var(--shadow-raised);
+    filter: brightness(1.08);
+  }
+  .tl-clip-selected {
+    border-color: rgb(var(--tl-accent, 161 161 170) / 0.95);
+    box-shadow:
+      0 0 0 1px rgb(var(--tl-accent, 161 161 170) / 0.7),
+      var(--shadow-raised);
+  }
+
+  /* Storyboard placeholder fill — no real images, just a styled card. */
+  .tl-visual-board {
+    background:
+      linear-gradient(
+        135deg,
+        rgb(var(--tl-visual) / 0.22),
+        rgb(var(--tl-visual) / 0.06)
+      ),
+      repeating-linear-gradient(
+        45deg,
+        rgba(255, 255, 255, 0.03) 0 6px,
+        transparent 6px 12px
+      );
+  }
+
+  /* Waveform-ish texture for dialogue clips (bars, feathered at the edges). */
+  .tl-wave {
+    background-image: repeating-linear-gradient(
+      90deg,
+      rgb(var(--tl-accent, 161 161 170) / 0.55) 0 2px,
+      transparent 2px 5px
+    );
+    -webkit-mask-image: linear-gradient(
+      90deg,
+      transparent,
+      #000 8%,
+      #000 92%,
+      transparent
+    );
+    mask-image: linear-gradient(
+      90deg,
+      transparent,
+      #000 8%,
+      #000 92%,
+      transparent
+    );
+    opacity: 0.32;
+  }
+
+  .tl-playhead {
+    background: linear-gradient(
+      180deg,
+      rgb(var(--tl-playhead) / 0.9),
+      rgb(var(--tl-playhead) / 0.45)
+    );
+    box-shadow: 0 0 12px -2px rgb(var(--tl-playhead) / 0.8);
+  }
+  .tl-playhead-handle {
+    background: rgb(var(--tl-playhead));
+    box-shadow: 0 0 10px -1px rgb(var(--tl-playhead) / 0.9);
+  }
+
+  .tl-sfx-marker {
+    background: rgb(var(--tl-sfx) / 0.92);
+    box-shadow: 0 0 10px -2px rgb(var(--tl-sfx) / 0.8);
+  }
+
+  .tl-ruler {
+    background: linear-gradient(180deg, rgba(255, 255, 255, 0.03), transparent);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .tl-clip {
+    transition: none;
+  }
+  .tl-clip:hover {
+    filter: none;
+  }
+}

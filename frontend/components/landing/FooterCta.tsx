@@ -33,6 +33,22 @@ export default function FooterCta() {
             <ul className="flex items-center gap-6 text-xs text-zinc-500">
               <li>
                 <Link
+                  href="/casting"
+                  className={`rounded-sm transition-colors hover:text-zinc-200 ${FOCUS_RING}`}
+                >
+                  Casting
+                </Link>
+              </li>
+              <li>
+                <Link
+                  href="/timeline"
+                  className={`rounded-sm transition-colors hover:text-zinc-200 ${FOCUS_RING}`}
+                >
+                  Timeline
+                </Link>
+              </li>
+              <li>
+                <Link
                   href="/scenes/demo"
                   className={`rounded-sm transition-colors hover:text-zinc-200 ${FOCUS_RING}`}
                 >
