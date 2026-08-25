@@ -64,6 +64,27 @@ class LLMResult(BaseModel):
     model: str
 
 
+class VideoResult(BaseModel):
+    """Result of an image/text -> video generation.
+
+    The video-generation analogue of ``TTSResult``. Because video providers run
+    an async job, the result carries both the provider's output URL(s) and the
+    downloaded bytes (``video_bytes`` is ``b""`` when the caller opts out of the
+    download). ``duration_ms`` is the requested clip length; the rest mirrors the
+    one-shot result models so the cost governor sees a uniform ``cost_cents``.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    video_bytes: bytes
+    output_urls: list[str]
+    duration_ms: int
+    cost_cents: int
+    provider: str
+    model: str
+    gen_params: dict
+
+
 class Voice(BaseModel):
     model_config = ConfigDict(frozen=True)
 
@@ -106,3 +127,20 @@ class LLMProvider(Protocol):
     async def complete(self, system: str, user: str, params: dict) -> LLMResult: ...
 
     def estimate_cost_cents(self, prompt_chars: int) -> int: ...
+
+
+@runtime_checkable
+class VideoProvider(Protocol):
+    name: str
+
+    async def generate(
+        self,
+        prompt: str | None,
+        *,
+        image: bytes | str | None = None,
+        duration_s: int = 5,
+        model: str | None = None,
+        params: dict | None = None,
+    ) -> VideoResult: ...
+
+    def estimate_cost_cents(self, duration_s: int, model: str | None = None) -> int: ...

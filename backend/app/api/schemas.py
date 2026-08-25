@@ -11,7 +11,10 @@ from typing import Literal
 
 from pydantic import BaseModel, Field, model_validator
 
+from app.adapters.base import Voice
 from app.ingest.elements import StoryGraph
+from app.judge.model import AnimaticJudgment, RankingResult, VoiceFitResult
+from app.judge.ranking import AnimaticCandidate, VoiceCandidate
 from app.shotlist.schema import ShotSpec
 
 GrammarProfile = Literal["classical", "handheld", "symmetrical", "anime"]
@@ -126,3 +129,76 @@ class FindingOut(BaseModel):
 class FindingPatch(BaseModel):
     deliberate: bool
     deliberate_note: str | None = None
+
+
+class VoiceFitRequest(BaseModel):
+    """Body for POST .../judge/voices.
+
+    ``casting`` maps a character's canonical name to its assigned voice (a
+    ``Voice`` carries id/name/tags — the same shape the TTS adapters expose).
+    ``available_voices`` is the pool alternative suggestions are drawn from; when
+    omitted it defaults to the distinct voices already used in the casting.
+    """
+
+    casting: dict[str, Voice] = Field(min_length=1)
+    available_voices: list[Voice] | None = None
+
+
+class VoiceFitOut(VoiceFitResult):
+    """Response for POST .../judge/voices; identical shape to the judge model."""
+
+
+class AnimaticJudgmentOut(AnimaticJudgment):
+    """Response for POST .../judge/animatic; identical shape to the judge model."""
+
+
+def _require_unique_labels(labels: list[str]) -> None:
+    seen: set[str] = set()
+    duplicates: set[str] = set()
+    for label in labels:
+        (duplicates if label in seen else seen).add(label)
+    if duplicates:
+        raise ValueError(
+            f"candidate labels must be unique; duplicated: {', '.join(sorted(duplicates))}"
+        )
+
+
+class VoiceRankRequest(BaseModel):
+    """Body for POST .../judge/rank/voices.
+
+    ``candidates`` is a non-empty list of casting variants, each with a unique
+    ``label``; they are judged against the project's IR and ranked best-first.
+    ``available_voices`` is the shared suggestion pool applied to every candidate.
+    """
+
+    candidates: list[VoiceCandidate] = Field(min_length=1)
+    available_voices: list[Voice] | None = None
+
+    @model_validator(mode="after")
+    def _unique_labels(self) -> "VoiceRankRequest":
+        _require_unique_labels([c.label for c in self.candidates])
+        return self
+
+
+class AnimaticRankRequest(BaseModel):
+    """Body for POST .../judge/rank/animatic.
+
+    ``candidates`` is a non-empty list of animatic variants, each with a unique
+    ``label`` and its own set of scene shot lists (the same ``SceneShotList``
+    shape the shot-list endpoints use). Each variant is scored and ranked.
+    """
+
+    candidates: list[AnimaticCandidate] = Field(min_length=1)
+
+    @model_validator(mode="after")
+    def _unique_labels(self) -> "AnimaticRankRequest":
+        _require_unique_labels([c.label for c in self.candidates])
+        return self
+
+
+class VoiceRankingOut(RankingResult[VoiceFitResult]):
+    """Response for POST .../judge/rank/voices; a leaderboard of casting variants."""
+
+
+class AnimaticRankingOut(RankingResult[AnimaticJudgment]):
+    """Response for POST .../judge/rank/animatic; a leaderboard of animatic variants."""

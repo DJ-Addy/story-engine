@@ -5,7 +5,8 @@ from __future__ import annotations
 from fastapi import Depends, HTTPException
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
-from app.adapters.base import TTSProvider
+from app import config  # noqa: F401  # loads backend/.env before env reads
+from app.adapters.base import TerminalProviderError, TTSProvider, VideoProvider
 from app.api import auth
 from app.api.repo import InMemoryRepository, ProjectRecord, Repository, UserRecord
 
@@ -23,13 +24,24 @@ def get_repo() -> Repository:
 def get_tts() -> TTSProvider:
     """Default TTS provider, selected from the environment.
 
-    With AZURE_SPEECH_KEY + AZURE_SPEECH_REGION set, use the Azure neural
-    adapter (real emotion via SSML express-as); otherwise fall back to the
-    free, keyless Edge adapter. Imported lazily so offline test collection
-    never pulls in the aiohttp network stack; tests always override this with
-    app.adapters.fake.FakeTTS via app.dependency_overrides.
+    Whichever credential is present picks the provider, in priority order:
+
+    1. ELEVENLABS_API_KEY -> ElevenLabs adapter (emotion via voice_settings).
+    2. AZURE_SPEECH_KEY + AZURE_SPEECH_REGION -> Azure neural adapter (real
+       emotion via SSML express-as).
+    3. otherwise -> the free, keyless Edge adapter.
+
+    ``app.config`` (imported at module load) has already merged backend/.env
+    into the environment. Adapters are imported lazily so offline test
+    collection never pulls in the aiohttp network stack; tests always override
+    this with app.adapters.fake.FakeTTS via app.dependency_overrides.
     """
     import os
+
+    if os.environ.get("ELEVENLABS_API_KEY"):
+        from app.adapters.elevenlabs import ElevenLabsAdapter
+
+        return ElevenLabsAdapter()
 
     if os.environ.get("AZURE_SPEECH_KEY") and os.environ.get("AZURE_SPEECH_REGION"):
         from app.adapters.azure_tts import AzureTTSAdapter
@@ -39,6 +51,26 @@ def get_tts() -> TTSProvider:
     from app.adapters.edge import EdgeTTSAdapter
 
     return EdgeTTSAdapter()
+
+
+def get_video() -> VideoProvider:
+    """Default video renderer, selected from the environment.
+
+    Runway is the only video provider for now, so selection is simple: a present
+    ``RUNWAY_API_KEY`` picks it. Unlike ``get_tts`` there is no keyless fallback
+    renderer, so this raises when no video provider is configured.
+
+    The adapter is imported lazily so offline test collection never pulls in the
+    aiohttp network stack.
+    """
+    import os
+
+    if os.environ.get("RUNWAY_API_KEY"):
+        from app.adapters.runway import RunwayAdapter
+
+        return RunwayAdapter()
+
+    raise TerminalProviderError("no video provider configured (set RUNWAY_API_KEY)")
 
 
 def get_current_user(

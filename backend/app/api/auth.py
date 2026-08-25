@@ -16,7 +16,10 @@ ACCESS_TOKEN_TTL_SECONDS = 60 * 60  # 60 minutes per PRD
 
 
 def _secret() -> str:
-    return os.environ.get("STORY_ENGINE_SECRET", "dev-secret-change-me")
+    # `or` (not a .get default) so a present-but-empty env/.env value — e.g. a
+    # blank STORY_ENGINE_SECRET= line — still falls back instead of yielding an
+    # empty, invalid HMAC key.
+    return os.environ.get("STORY_ENGINE_SECRET") or "dev-secret-change-me"
 
 
 def new_salt() -> str:

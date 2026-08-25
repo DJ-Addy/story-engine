@@ -2,8 +2,9 @@
 
 Each scene is rendered by the normal pipeline (per-character voices + inferred
 ambience, sidechain-ducked), then the scenes are concatenated with a
-scene-change gap (PRD boundary table: 1600 ms). Uses EdgeTTSAdapter (real
-Microsoft neural voices) — needs network. Writes backend/out/full_example.wav.
+scene-change gap (PRD boundary table: 1600 ms). The TTS provider is auto-selected
+from the environment via get_tts (ElevenLabs > Azure > Edge) — needs network.
+Writes backend/out/full_example.wav.
 """
 
 from __future__ import annotations
@@ -18,7 +19,7 @@ if str(BACKEND_ROOT) not in sys.path:
 
 import numpy as np
 
-from app.adapters.edge import EdgeTTSAdapter
+from app.api.deps import get_tts
 from app.ingest.fountain import parse_fountain
 from app.ingest.normalize import normalize
 from app.render.audio import dsp
@@ -41,7 +42,8 @@ _SPOKEN = {"dialogue", "action", "narration"}
 async def main() -> int:
     graph = normalize(parse_fountain(FIXTURE.read_text(encoding="utf-8")))
     scenes = [s for s in graph.scenes if any(l.kind in _SPOKEN and l.text.strip() for l in s.lines)]
-    tts = EdgeTTSAdapter()
+    tts = get_tts()  # provider auto-selected from the environment (ElevenLabs > Azure > Edge)
+    print(f"tts provider: {type(tts).__name__}")
     gap = np.zeros(round(SCENE_GAP_MS * dsp.SR / 1000), dtype=np.float32)
 
     pieces: list[np.ndarray] = []
