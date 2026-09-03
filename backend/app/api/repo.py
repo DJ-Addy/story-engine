@@ -15,6 +15,7 @@ from pydantic import BaseModel
 
 from app.continuity.model import Finding
 from app.ingest.elements import StoryGraph
+from app.render.audio.model import SceneTiming
 from app.shotlist.schema import SceneShotList
 
 
@@ -58,6 +59,22 @@ class AudioRenderRecord(BaseModel):
     duration_ms: int
     clip_count: int
     ambience_tags: list[str]
+    # Time-aligned placement from the same render pass, for the scene timeline.
+    timing: SceneTiming
+
+
+class VideoRenderRecord(BaseModel):
+    id: str
+    project_id: str
+    scene_ordinal: int
+    shot_ordinal: int
+    video_bytes: bytes  # b"" when the provider returned URLs only
+    output_urls: list[str]
+    duration_ms: int
+    cost_cents: int
+    provider: str
+    model: str
+    source: str  # "image" | "text" — which generation path was taken
 
 
 class FindingRecord(BaseModel):
@@ -126,10 +143,39 @@ class Repository(Protocol):
         duration_ms: int,
         clip_count: int,
         ambience_tags: list[str],
+        timing: SceneTiming,
     ) -> AudioRenderRecord: ...
     def get_audio_render(
         self, project_id: str, scene_ordinal: int
     ) -> AudioRenderRecord | None: ...
+
+    # -- video renders ---------------------------------------------------------
+    def save_video_render(
+        self,
+        project_id: str,
+        scene_ordinal: int,
+        shot_ordinal: int,
+        video_bytes: bytes,
+        output_urls: list[str],
+        duration_ms: int,
+        cost_cents: int,
+        provider: str,
+        model: str,
+        source: str,
+    ) -> VideoRenderRecord: ...
+    def get_video_render(
+        self, project_id: str, scene_ordinal: int, shot_ordinal: int
+    ) -> VideoRenderRecord | None: ...
+
+    # -- shot frames (previz boards) -------------------------------------------
+    # A per-shot board/frame image, when the previz pipeline has rendered one.
+    # Its presence drives image-to-video vs text-to-video in the video renderer.
+    def save_shot_frame(
+        self, project_id: str, scene_ordinal: int, shot_ordinal: int, image_bytes: bytes
+    ) -> None: ...
+    def get_shot_frame(
+        self, project_id: str, scene_ordinal: int, shot_ordinal: int
+    ) -> bytes | None: ...
 
 
 class InMemoryRepository:
@@ -145,6 +191,10 @@ class InMemoryRepository:
         self._findings: dict[str, FindingRecord] = {}
         # One (latest) render per (project, scene).
         self._audio_renders: dict[tuple[str, int], AudioRenderRecord] = {}
+        # One (latest) video render per (project, scene, shot).
+        self._video_renders: dict[tuple[str, int, int], VideoRenderRecord] = {}
+        # Per-shot previz board/frame image bytes (project, scene, shot).
+        self._shot_frames: dict[tuple[str, int, int], bytes] = {}
 
     # -- users -------------------------------------------------------------
     def create_user(self, email: str, password_hash: str, salt: str) -> UserRecord:
@@ -285,6 +335,7 @@ class InMemoryRepository:
         duration_ms: int,
         clip_count: int,
         ambience_tags: list[str],
+        timing: SceneTiming,
     ) -> AudioRenderRecord:
         record = AudioRenderRecord(
             id=str(uuid4()),
@@ -294,6 +345,7 @@ class InMemoryRepository:
             duration_ms=duration_ms,
             clip_count=clip_count,
             ambience_tags=list(ambience_tags),
+            timing=timing,
         )
         self._audio_renders[(project_id, scene_ordinal)] = record
         return record
@@ -302,3 +354,49 @@ class InMemoryRepository:
         self, project_id: str, scene_ordinal: int
     ) -> AudioRenderRecord | None:
         return self._audio_renders.get((project_id, scene_ordinal))
+
+    # -- video renders ---------------------------------------------------------
+    def save_video_render(
+        self,
+        project_id: str,
+        scene_ordinal: int,
+        shot_ordinal: int,
+        video_bytes: bytes,
+        output_urls: list[str],
+        duration_ms: int,
+        cost_cents: int,
+        provider: str,
+        model: str,
+        source: str,
+    ) -> VideoRenderRecord:
+        record = VideoRenderRecord(
+            id=str(uuid4()),
+            project_id=project_id,
+            scene_ordinal=scene_ordinal,
+            shot_ordinal=shot_ordinal,
+            video_bytes=video_bytes,
+            output_urls=list(output_urls),
+            duration_ms=duration_ms,
+            cost_cents=cost_cents,
+            provider=provider,
+            model=model,
+            source=source,
+        )
+        self._video_renders[(project_id, scene_ordinal, shot_ordinal)] = record
+        return record
+
+    def get_video_render(
+        self, project_id: str, scene_ordinal: int, shot_ordinal: int
+    ) -> VideoRenderRecord | None:
+        return self._video_renders.get((project_id, scene_ordinal, shot_ordinal))
+
+    # -- shot frames (previz boards) -------------------------------------------
+    def save_shot_frame(
+        self, project_id: str, scene_ordinal: int, shot_ordinal: int, image_bytes: bytes
+    ) -> None:
+        self._shot_frames[(project_id, scene_ordinal, shot_ordinal)] = image_bytes
+
+    def get_shot_frame(
+        self, project_id: str, scene_ordinal: int, shot_ordinal: int
+    ) -> bytes | None:
+        return self._shot_frames.get((project_id, scene_ordinal, shot_ordinal))

@@ -61,3 +61,40 @@ class TimelineEntry(BaseModel):
 class SpeechBusPlan(BaseModel):
     entries: list[TimelineEntry]
     total_ms: int
+
+
+class RenderedClip(BaseModel):
+    """One spoken clip as actually placed on the speech bus, with its onset and
+    real (post-TTS) duration. ``character_name is None`` means the narrator or an
+    action/narration line. Keyed by ``line_ordinal`` so shot coverage
+    (``covers_lines``) can be mapped onto clip timings."""
+
+    line_ordinal: int
+    kind: str  # dialogue|narration|action
+    character_name: str | None = None
+    emotion: str | None = None
+    text: str
+    start_ms: int
+    duration_ms: int = Field(ge=0)
+
+
+class RenderedSfx(BaseModel):
+    """A foreground SFX event and the time it was placed on the SFX bus."""
+
+    at_ms: int
+    name: str
+
+
+class SceneTiming(BaseModel):
+    """Time-aligned placement metadata for a single scene render.
+
+    Computed by the same render pass that produces the WAV (so the onsets line
+    up with the audio to the millisecond) but carries no audio bytes. The API
+    layer projects this — plus the scene's shot list — into a ``SceneTimeline``.
+    """
+
+    scene_ordinal: int
+    duration_ms: int
+    clips: list[RenderedClip] = Field(default_factory=list)
+    sfx: list[RenderedSfx] = Field(default_factory=list)
+    ambience_tags: list[str] = Field(default_factory=list)

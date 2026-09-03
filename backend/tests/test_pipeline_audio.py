@@ -7,7 +7,11 @@ from app.adapters.fake import FakeTTS
 from app.ingest.elements import AttributedLine, NormalizedScene
 from app.render.audio import dsp
 from app.render.audio.model import SpeechClip
-from app.render.audio.pipeline import _TAIL_MS, render_scene_audio
+from app.render.audio.pipeline import (
+    _TAIL_MS,
+    render_scene_audio,
+    render_scene_audio_with_timing,
+)
 from app.render.audio.timing import plan_speech_bus
 
 VOICE_MAP: dict[str | None, str] = {
@@ -84,6 +88,64 @@ async def test_render_scene_with_fake_tts() -> None:
     assert len(samples) == round(expected_total_ms * dsp.SR / 1000)
     assert float(np.max(np.abs(samples))) <= 0.98 + 1e-4
     assert np.any(samples != 0.0)
+
+
+async def test_with_timing_matches_audio_and_exposes_placement() -> None:
+    scene = _scene()
+    # Same seed/provider: the timing sibling must produce byte-identical audio
+    # to the plain renderer (it is the same code path) and expose per-clip onsets.
+    result_only = await render_scene_audio(scene, VOICE_MAP, FakeTTS(), seed=7)
+    result, timing = await render_scene_audio_with_timing(
+        scene, VOICE_MAP, FakeTTS(), seed=7
+    )
+    assert result.wav_bytes == result_only.wav_bytes
+    assert timing.duration_ms == result.duration_ms
+    assert timing.scene_ordinal == scene.ordinal
+    assert timing.ambience_tags == result.ambience_tags
+
+    # Placement must match the independently planned speech bus (ordinals 1,2,4,5,6;
+    # parenthetical + transition dropped), start_ms and duration_ms per clip.
+    ordinals = [1, 2, 4, 5, 6]
+    block_ids = [0, 1, 2, 2, 3]
+    durations = [len(t.split()) * 60 for t in [
+        "Tom opens the door.",
+        "You should not be out.",
+        "The ship is off the shoals.",
+        "Then it burns.",
+        "Thunder outside.",
+    ]]
+    speakers = [None, "TOM", "MARA", "MARA", None]
+    clips = [
+        SpeechClip(
+            line_ordinal=o, character_name=sp, duration_ms=d,
+            beat_index=0, scene_ordinal=2, block_id=b,
+        )
+        for o, sp, d, b in zip(ordinals, speakers, durations, block_ids, strict=True)
+    ]
+    plan = plan_speech_bus(clips)
+    assert [c.line_ordinal for c in timing.clips] == ordinals
+    assert [c.start_ms for c in timing.clips] == [e.start_ms for e in plan.entries]
+    assert [c.duration_ms for c in timing.clips] == durations
+    # Kinds and speakers carried through (action lines have a None character).
+    assert [c.kind for c in timing.clips] == [
+        "action", "dialogue", "dialogue", "dialogue", "action"
+    ]
+    assert [c.character_name for c in timing.clips] == speakers
+
+
+async def test_with_timing_sfx_markers_have_onsets() -> None:
+    scene = NormalizedScene(
+        ordinal=1, slugline="INT. ROOM - NIGHT", interior=True, location="ROOM",
+        time_of_day="NIGHT",
+        lines=[
+            AttributedLine(ordinal=1, kind="action", text="A door slams shut."),
+        ],
+    )
+    _result, timing = await render_scene_audio_with_timing(
+        scene, {None: "n"}, FakeTTS(), seed=5
+    )
+    # The single action line's SFX is placed at that clip's onset (0).
+    assert [(m.name, m.at_ms) for m in timing.sfx] == [("door_slam", 0)]
 
 
 async def test_render_scene_deterministic_ambience() -> None:

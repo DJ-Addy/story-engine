@@ -10,13 +10,25 @@ from fastapi import APIRouter, Depends, HTTPException, Response
 
 from app.adapters.base import TTSProvider
 from app.api.deps import get_owned_project, get_repo, get_tts
-from app.api.repo import FindingRecord, ProjectRecord, Repository
-from app.api.schemas import AudioRenderOut, FindingOut, FindingPatch, ShotListOut
+from app.api.repo import AudioRenderRecord, FindingRecord, ProjectRecord, Repository
+from app.api.schemas import (
+    AudioRenderOut,
+    FindingOut,
+    FindingPatch,
+    SceneMarker,
+    SceneTimeline,
+    ShotListOut,
+    TimelineAmbienceSpan,
+    TimelineDialogueClip,
+    TimelineSfxMarker,
+    TimelineVisualClip,
+)
 from app.continuity.model import Finding, SceneContext, ShotMeta
 from app.continuity.validator import validate_scene
 from app.costs import governor
 from app.ingest.elements import NormalizedScene, StoryGraph
-from app.render.audio.pipeline import render_scene_audio
+from app.render.audio.model import SceneTiming
+from app.render.audio.pipeline import render_scene_audio_with_timing
 from app.shotlist.schema import SceneShotList
 
 router = APIRouter(prefix="/projects/{project_id}/scenes/{ordinal}", tags=["scenes"])
@@ -202,7 +214,7 @@ async def render_audio(
             ),
         ) from exc
 
-    result = await render_scene_audio(scene, _voice_map(scene), tts)
+    result, timing = await render_scene_audio_with_timing(scene, _voice_map(scene), tts)
     project.cost_spent_cents += estimated_cents
     repo.save_audio_render(
         project.id,
@@ -211,6 +223,7 @@ async def render_audio(
         duration_ms=result.duration_ms,
         clip_count=result.clip_count,
         ambience_tags=result.ambience_tags,
+        timing=timing,
     )
     return AudioRenderOut(
         scene_ordinal=ordinal,
@@ -232,3 +245,84 @@ def get_audio(
             status_code=404, detail=f"No audio rendered yet for scene {ordinal}"
         )
     return Response(content=record.wav_bytes, media_type="audio/wav")
+
+
+def _visual_lane(
+    timing: SceneTiming, shotlist: SceneShotList | None
+) -> list[TimelineVisualClip]:
+    """Project each shot onto the dialogue-clip timings its covers_lines span.
+
+    A shot's clip runs from the earliest onset to the latest end of the placed
+    clips whose line_ordinal it covers. Shots covering no placed line (e.g. lines
+    that were skipped as non-spoken) are omitted, and shots stay in ordinal order.
+    """
+    if shotlist is None:
+        return []
+    spans = {clip.line_ordinal: (clip.start_ms, clip.duration_ms) for clip in timing.clips}
+    lane: list[TimelineVisualClip] = []
+    for shot in shotlist.shots:
+        covered = [spans[ln] for ln in shot.covers_lines if ln in spans]
+        if not covered:
+            continue
+        start_ms = min(start for start, _ in covered)
+        end_ms = max(start + duration for start, duration in covered)
+        lane.append(
+            TimelineVisualClip(
+                start_ms=start_ms,
+                duration_ms=end_ms - start_ms,
+                shot_ordinal=shot.ordinal,
+                size=shot.size,
+                subjects=list(shot.subjects),
+            )
+        )
+    return lane
+
+
+def _build_timeline(
+    record: AudioRenderRecord, scene: NormalizedScene, shotlist: SceneShotList | None
+) -> SceneTimeline:
+    timing = record.timing
+    dialogue = [
+        TimelineDialogueClip(
+            line_ordinal=clip.line_ordinal,
+            start_ms=clip.start_ms,
+            duration_ms=clip.duration_ms,
+            character=clip.character_name,
+            emotion=clip.emotion,
+            text=clip.text,
+        )
+        for clip in timing.clips
+    ]
+    ambience = [
+        TimelineAmbienceSpan(start_ms=0, duration_ms=timing.duration_ms, tag=tag)
+        for tag in timing.ambience_tags
+    ]
+    sfx = [TimelineSfxMarker(at_ms=marker.at_ms, name=marker.name) for marker in timing.sfx]
+    return SceneTimeline(
+        scene_ordinal=timing.scene_ordinal,
+        duration_ms=timing.duration_ms,
+        markers=[
+            SceneMarker(scene_ordinal=scene.ordinal, start_ms=0, slugline=scene.slugline)
+        ],
+        dialogue=dialogue,
+        ambience=ambience,
+        sfx=sfx,
+        visual=_visual_lane(timing, shotlist),
+    )
+
+
+@router.get("/timeline", response_model=SceneTimeline)
+def get_timeline(
+    ordinal: int,
+    project: ProjectRecord = Depends(get_owned_project),
+    repo: Repository = Depends(get_repo),
+) -> SceneTimeline:
+    _, scene = _get_scene_or_404(repo, project.id, ordinal)
+    record = repo.get_audio_render(project.id, ordinal)
+    if record is None:
+        raise HTTPException(
+            status_code=404, detail=f"No audio rendered yet for scene {ordinal}"
+        )
+    shotlist_record = repo.get_shotlist(project.id, ordinal)
+    shotlist = shotlist_record.shotlist if shotlist_record is not None else None
+    return _build_timeline(record, scene, shotlist)

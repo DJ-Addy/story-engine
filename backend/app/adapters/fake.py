@@ -10,6 +10,7 @@ from app.adapters.base import (
     RetryableProviderError,
     TerminalProviderError,
     TTSResult,
+    VideoResult,
     Voice,
 )
 
@@ -104,6 +105,58 @@ class FakeImage(_FailureInjector):
 
     def estimate_cost_cents(self, n: int) -> int:
         return n * self.COST_CENTS_PER_IMAGE
+
+
+class FakeVideo(_FailureInjector):
+    """Deterministic image/text -> video provider for tests. Never touches the
+    network. Records each ``generate`` call so tests can assert which path
+    (image-to-video vs text-to-video) the endpoint took."""
+
+    name = "fake-video"
+    model = "fake-video-v1"
+
+    CENTS_PER_SECOND = 5
+
+    def __init__(self, fail_times: int = 0, terminal_fail: bool = False) -> None:
+        super().__init__(fail_times=fail_times, terminal_fail=terminal_fail)
+        self.calls: list[dict] = []
+
+    async def generate(
+        self,
+        prompt: str | None = None,
+        *,
+        image: bytes | str | None = None,
+        duration_s: int = 5,
+        model: str | None = None,
+        params: dict | None = None,
+    ) -> VideoResult:
+        self._maybe_fail()
+        has_image = image is not None
+        self.calls.append(
+            {"prompt": prompt, "has_image": has_image, "duration_s": duration_s}
+        )
+        model_id = model or self.model
+        return VideoResult(
+            video_bytes=_deterministic_bytes(
+                "video", prompt or "", str(has_image), str(duration_s)
+            ),
+            output_urls=[
+                f"https://fake.local/{_deterministic_bytes('video-url', prompt or '').hex()}.mp4"
+            ],
+            duration_ms=duration_s * 1000,
+            cost_cents=self.estimate_cost_cents(duration_s, model_id),
+            provider=self.name,
+            model=model_id,
+            gen_params={
+                "has_image": has_image,
+                "prompt": prompt,
+                "duration_s": duration_s,
+                **(params or {}),
+            },
+        )
+
+    def estimate_cost_cents(self, duration_s: int, model: str | None = None) -> int:
+        return max(1, duration_s * self.CENTS_PER_SECOND)
 
 
 class FakeLLM(_FailureInjector):

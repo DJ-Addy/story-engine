@@ -92,6 +92,85 @@ class AudioRenderOut(BaseModel):
     ambience_tags: list[str]
 
 
+class TimelineDialogueClip(BaseModel):
+    """A placed spoken clip on the dialogue lane. Carries every rendered spoken
+    line (dialogue, narration and action), keyed by ``line_ordinal`` so shot
+    coverage can be mapped onto it; ``character`` is None for the narrator or an
+    action/narration line."""
+
+    line_ordinal: int
+    start_ms: int
+    duration_ms: int
+    character: str | None
+    emotion: str | None
+    text: str
+
+
+class TimelineAmbienceSpan(BaseModel):
+    start_ms: int
+    duration_ms: int
+    tag: str
+
+
+class TimelineSfxMarker(BaseModel):
+    at_ms: int
+    name: str
+
+
+class TimelineVisualClip(BaseModel):
+    """A shot placed on the visual lane, spanning the dialogue clips its
+    ``covers_lines`` reference."""
+
+    start_ms: int
+    duration_ms: int
+    shot_ordinal: int
+    size: str
+    subjects: list[str]
+
+
+class SceneMarker(BaseModel):
+    scene_ordinal: int
+    start_ms: int
+    slugline: str | None = None
+
+
+class SceneTimeline(BaseModel):
+    """Structured, time-aligned lane data for one scene render, so a scrubbable
+    frontend timeline can line up with the rendered WAV. The dialogue/ambience/
+    sfx lanes come from the render pass; the visual lane is projected from the
+    scene's current shot list."""
+
+    scene_ordinal: int
+    duration_ms: int
+    markers: list[SceneMarker]
+    dialogue: list[TimelineDialogueClip]
+    ambience: list[TimelineAmbienceSpan]
+    sfx: list[TimelineSfxMarker]
+    visual: list[TimelineVisualClip]
+
+
+class VideoRenderRequest(BaseModel):
+    """Body for POST .../render/video: which shot to render and how long. The
+    shot is addressed by (scene_ordinal, shot_ordinal); ``duration_s`` is the
+    requested clip length passed to the video provider."""
+
+    scene_ordinal: int = Field(ge=1)
+    shot_ordinal: int = Field(ge=1)
+    duration_s: int = Field(default=5, ge=1, le=60)
+
+
+class VideoRenderOut(BaseModel):
+    scene_ordinal: int
+    shot_ordinal: int
+    duration_ms: int
+    cost_cents: int
+    provider: str
+    model: str
+    source: Literal["image", "text"]  # which generation path was taken
+    output_urls: list[str]
+    has_video: bool  # whether downloaded clip bytes are stored
+
+
 class StoryGraphOut(StoryGraph):
     """Response model for GET .../graph; identical shape to the ingest model."""
 

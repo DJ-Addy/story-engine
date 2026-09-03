@@ -19,7 +19,12 @@ from app.ingest.elements import NormalizedScene
 from app.nlp.ambience import ambience_tags
 from app.nlp.sound_events import detect_sound_events
 from app.render.audio import dsp, sfx
-from app.render.audio.model import SpeechClip
+from app.render.audio.model import (
+    RenderedClip,
+    RenderedSfx,
+    SceneTiming,
+    SpeechClip,
+)
 from app.render.audio.timing import plan_speech_bus
 
 _CONCURRENCY = 4
@@ -48,15 +53,16 @@ def _build_sfx_bus(
     total_samples: int,
     seed: int,
     scene_ordinal: int,
-) -> tuple[np.ndarray, list[str]]:
+) -> tuple[np.ndarray, list[RenderedSfx]]:
     """Place synthesized SFX for each action line at its narration time.
 
     Events from one line are laid down back-to-back starting at that line's
     clip onset, so the sound tracks the words describing it. Returns the SFX
-    bus and the ordered list of events placed (for reporting/tests).
+    bus and the ordered list of placed events with their onset times (for
+    reporting/tests and the scene timeline).
     """
     bus = np.zeros(total_samples, dtype=np.float32)
-    placed: list[str] = []
+    placed: list[RenderedSfx] = []
     rng = np.random.default_rng([seed, 0x5F_C0DE, scene_ordinal])
     _gap = round(0.15 * dsp.SR)
     for entry in plan.entries:
@@ -70,7 +76,7 @@ def _build_sfx_bus(
                 break
             end = min(cursor + len(clip), total_samples)
             bus[cursor:end] += clip[: end - cursor]
-            placed.append(event)
+            placed.append(RenderedSfx(at_ms=round(cursor * 1000 / dsp.SR), name=event))
             cursor = end + _gap
     return bus, placed
 
@@ -93,6 +99,25 @@ async def render_scene_audio(
     tts: TTSProvider,
     seed: int = 7,
 ) -> SceneRenderResult:
+    """Render a scene to a mixed WAV. Backward-compatible thin wrapper around
+    :func:`render_scene_audio_with_timing` that discards the timing payload; the
+    audio bytes are byte-identical to that function's (same code path)."""
+    result, _timing = await render_scene_audio_with_timing(scene, voice_map, tts, seed)
+    return result
+
+
+async def render_scene_audio_with_timing(
+    scene: NormalizedScene,
+    voice_map: dict[str | None, str],
+    tts: TTSProvider,
+    seed: int = 7,
+) -> tuple[SceneRenderResult, SceneTiming]:
+    """Render a scene AND expose the per-clip placement used to build it.
+
+    Identical audio to :func:`render_scene_audio` — the timing is read off the
+    very same speech-bus plan and SFX pass that produce the WAV, so every onset
+    lines up with the rendered bytes to the millisecond.
+    """
     lines = [line for line in scene.lines if line.kind in _SPOKEN_KINDS and line.text.strip()]
 
     semaphore = asyncio.Semaphore(_CONCURRENCY)
@@ -151,13 +176,36 @@ async def render_scene_audio(
     bed = dsp.synth_ambience(tags, min(total_ms / 1000.0, _AMBIENCE_BASE_S), seed)
     bed = dsp.loop_to_length(bed, total_samples)
 
-    sfx_bus, sfx_events = _build_sfx_bus(lines, plan, total_samples, seed, scene.ordinal)
+    sfx_bus, sfx_markers = _build_sfx_bus(lines, plan, total_samples, seed, scene.ordinal)
 
     mixed = dsp.mix_scene(speech_bus, bed, sfx_bus)
-    return SceneRenderResult(
+    duration_ms = round(len(mixed) / dsp.SR * 1000)
+
+    rendered_clips = [
+        RenderedClip(
+            line_ordinal=lines[entry.clip_index].ordinal,
+            kind=lines[entry.clip_index].kind,
+            character_name=clips[entry.clip_index].character_name,
+            emotion=lines[entry.clip_index].emotion,
+            text=lines[entry.clip_index].text,
+            start_ms=entry.start_ms,
+            duration_ms=clips[entry.clip_index].duration_ms,
+        )
+        for entry in plan.entries
+    ]
+    timing = SceneTiming(
+        scene_ordinal=scene.ordinal,
+        duration_ms=duration_ms,
+        clips=rendered_clips,
+        sfx=sfx_markers,
+        ambience_tags=tags,
+    )
+
+    result = SceneRenderResult(
         wav_bytes=dsp.wav_bytes(mixed, dsp.SR),
-        duration_ms=round(len(mixed) / dsp.SR * 1000),
+        duration_ms=duration_ms,
         clip_count=len(clips),
         ambience_tags=tags,
-        sfx_events=sfx_events,
+        sfx_events=[marker.name for marker in sfx_markers],
     )
+    return result, timing
