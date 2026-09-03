@@ -250,13 +250,15 @@ export interface VisualClip {
   subjects: string[];
 }
 
-/** DIALOGUE lane: one spoken line. */
+/** DIALOGUE lane: one spoken line. `emotion` carries "neutral" for a line the
+ * IR left untagged — the backend's `AttributedLine.emotion` is nullable, and
+ * `emotionStyle` already renders that as the neutral accent. */
 export interface DialogueClip {
   id: string;
   startMs: number;
   durationMs: number;
   character: string;
-  emotion: Emotion;
+  emotion: Emotion | "neutral";
   text: string;
 }
 

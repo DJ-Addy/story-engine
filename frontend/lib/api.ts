@@ -1,6 +1,10 @@
 // Repository layer. All data access goes through this interface so the mock
 // can be swapped for the FastAPI client without touching UI code.
+//
+// Which implementation `api` points at is decided once, here, from
+// NEXT_PUBLIC_USE_MOCK_API (see the bottom of this file).
 
+import { HttpApi } from "@/lib/httpApi";
 import type {
   AnimaticJudgment,
   Finding,
@@ -198,4 +202,13 @@ class MockApi implements StoryEngineApi {
   }
 }
 
-export const api: StoryEngineApi = new MockApi();
+/**
+ * Mock unless NEXT_PUBLIC_USE_MOCK_API is explicitly "false". Defaulting to the
+ * mock keeps the demo runnable with no backend, no database, and no login —
+ * flipping the flag is the only step needed to point the same UI at uvicorn.
+ * Read as a full literal so Next can inline it at build time.
+ */
+export const USE_MOCK_API =
+  (process.env.NEXT_PUBLIC_USE_MOCK_API ?? "true").toLowerCase() !== "false";
+
+export const api: StoryEngineApi = USE_MOCK_API ? new MockApi() : new HttpApi();
