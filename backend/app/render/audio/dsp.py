@@ -341,12 +341,16 @@ def place_clips(clips: list[tuple[np.ndarray, int]], total_ms: int) -> np.ndarra
 
 _ENV_BLOCK = SR // 1000  # 1 ms control blocks keep the smoothing loop cheap
 
+# PRD compressor ratio. Named because the timeline editor's ambience-duck knob
+# is calibrated against it (app.render.audio.model.SceneRenderSettings).
+DUCK_RATIO_DEFAULT = 6.0
+
 
 def duck(
     ambience: np.ndarray,
     speech: np.ndarray,
     threshold: float = 0.02,
-    ratio: float = 6.0,
+    ratio: float = DUCK_RATIO_DEFAULT,
     attack_ms: int = 12,
     release_ms: int = 380,
 ) -> np.ndarray:
@@ -413,12 +417,16 @@ def mix_scene(
     speech_bus: np.ndarray,
     ambience_bed: np.ndarray,
     sfx_bus: np.ndarray | None = None,
+    duck_ratio: float = DUCK_RATIO_DEFAULT,
 ) -> np.ndarray:
     """Duck ambience under the foreground (speech + SFX), sum, normalize, limit.
 
     Sound effects are foreground events: they sit alongside speech and the
     ambience bed ducks under them too, so a thunder crack or a door slam
     pushes the bed down the same way a spoken line does.
+
+    ``duck_ratio`` is the sidechain compressor ratio; 1.0 disables ducking
+    entirely (unity gain) and higher values push the bed further down.
     """
     lengths = [len(speech_bus), len(ambience_bed)]
     if sfx_bus is not None:
@@ -434,7 +442,7 @@ def mix_scene(
         foreground = speech.copy()
         foreground[: len(sfx_bus)] += sfx_bus
 
-    mixed = foreground + duck(ambience, foreground)
+    mixed = foreground + duck(ambience, foreground, ratio=duck_ratio)
     return peak_limit(normalize_loudness(mixed))
 
 

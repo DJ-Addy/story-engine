@@ -33,13 +33,18 @@ def gap_between_ms(prev: SpeechClip, cur: SpeechClip) -> int:
     return max(candidates, default=GAP_INTRA_BLOCK_MS)
 
 
-def plan_speech_bus(clips: list[SpeechClip]) -> SpeechBusPlan:
-    """Place clips sequentially; first clip starts at 0."""
+def plan_speech_bus(clips: list[SpeechClip], gap_scale: float = 1.0) -> SpeechBusPlan:
+    """Place clips sequentially; first clip starts at 0.
+
+    ``gap_scale`` scales every gap from the PRD table (the timeline editor's
+    pacing knob). Only dead air moves — clip durations are TTS output. At the
+    default 1.0 the arithmetic is exact, so unedited scenes plan identically.
+    """
     entries: list[TimelineEntry] = []
     cursor = 0
     for index, clip in enumerate(clips):
         if index > 0:
-            cursor += gap_between_ms(clips[index - 1], clip)
+            cursor += round(gap_between_ms(clips[index - 1], clip) * gap_scale)
         entries.append(
             TimelineEntry(clip_index=index, clip=ClipRef.from_clip(clip), start_ms=cursor)
         )

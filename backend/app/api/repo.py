@@ -11,11 +11,11 @@ from __future__ import annotations
 from typing import Protocol
 from uuid import uuid4
 
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 
 from app.continuity.model import Finding
 from app.ingest.elements import StoryGraph
-from app.render.audio.model import SceneTiming
+from app.render.audio.model import DEFAULT_RENDER_SETTINGS, SceneRenderSettings, SceneTiming
 from app.shotlist.schema import SceneShotList
 
 
@@ -61,6 +61,12 @@ class AudioRenderRecord(BaseModel):
     ambience_tags: list[str]
     # Time-aligned placement from the same render pass, for the scene timeline.
     timing: SceneTiming
+    # Set when a timeline edit changed something these bytes depend on. The WAV
+    # is still served (it is the last real render) but every consumer is told it
+    # no longer matches the IR — silently serving audio the timeline disagrees
+    # with is the failure mode this flag exists to prevent.
+    stale: bool = False
+    stale_reasons: list[str] = Field(default_factory=list)
 
 
 class VideoRenderRecord(BaseModel):
@@ -148,6 +154,19 @@ class Repository(Protocol):
     def get_audio_render(
         self, project_id: str, scene_ordinal: int
     ) -> AudioRenderRecord | None: ...
+    def mark_audio_render_stale(
+        self, project_id: str, scene_ordinal: int, reasons: list[str]
+    ) -> AudioRenderRecord | None: ...
+
+    # -- per-scene render settings -----------------------------------------------
+    # Pacing / ambience-duck knobs the timeline editor writes; the renderer reads
+    # them back so a re-render actually sounds like the edit.
+    def get_render_settings(
+        self, project_id: str, scene_ordinal: int
+    ) -> SceneRenderSettings: ...
+    def save_render_settings(
+        self, project_id: str, scene_ordinal: int, settings: SceneRenderSettings
+    ) -> SceneRenderSettings: ...
 
     # -- video renders ---------------------------------------------------------
     def save_video_render(
@@ -191,6 +210,8 @@ class InMemoryRepository:
         self._findings: dict[str, FindingRecord] = {}
         # One (latest) render per (project, scene).
         self._audio_renders: dict[tuple[str, int], AudioRenderRecord] = {}
+        # Per-scene render settings; absent means "engine defaults".
+        self._render_settings: dict[tuple[str, int], SceneRenderSettings] = {}
         # One (latest) video render per (project, scene, shot).
         self._video_renders: dict[tuple[str, int, int], VideoRenderRecord] = {}
         # Per-shot previz board/frame image bytes (project, scene, shot).
@@ -354,6 +375,30 @@ class InMemoryRepository:
         self, project_id: str, scene_ordinal: int
     ) -> AudioRenderRecord | None:
         return self._audio_renders.get((project_id, scene_ordinal))
+
+    def mark_audio_render_stale(
+        self, project_id: str, scene_ordinal: int, reasons: list[str]
+    ) -> AudioRenderRecord | None:
+        record = self._audio_renders.get((project_id, scene_ordinal))
+        if record is None:
+            return None
+        record.stale = True
+        # Reasons accumulate across edits until the next render clears them, so
+        # the UI can say what drifted, not just that something did.
+        record.stale_reasons = [*record.stale_reasons, *reasons]
+        return record
+
+    # -- per-scene render settings -----------------------------------------------
+    def get_render_settings(
+        self, project_id: str, scene_ordinal: int
+    ) -> SceneRenderSettings:
+        return self._render_settings.get((project_id, scene_ordinal), DEFAULT_RENDER_SETTINGS)
+
+    def save_render_settings(
+        self, project_id: str, scene_ordinal: int, settings: SceneRenderSettings
+    ) -> SceneRenderSettings:
+        self._render_settings[(project_id, scene_ordinal)] = settings
+        return settings
 
     # -- video renders ---------------------------------------------------------
     def save_video_render(

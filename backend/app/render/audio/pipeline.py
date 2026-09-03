@@ -20,8 +20,10 @@ from app.nlp.ambience import ambience_tags
 from app.nlp.sound_events import detect_sound_events
 from app.render.audio import dsp, sfx
 from app.render.audio.model import (
+    DEFAULT_RENDER_SETTINGS,
     RenderedClip,
     RenderedSfx,
+    SceneRenderSettings,
     SceneTiming,
     SpeechClip,
 )
@@ -98,11 +100,14 @@ async def render_scene_audio(
     voice_map: dict[str | None, str],
     tts: TTSProvider,
     seed: int = 7,
+    settings: SceneRenderSettings | None = None,
 ) -> SceneRenderResult:
     """Render a scene to a mixed WAV. Backward-compatible thin wrapper around
     :func:`render_scene_audio_with_timing` that discards the timing payload; the
     audio bytes are byte-identical to that function's (same code path)."""
-    result, _timing = await render_scene_audio_with_timing(scene, voice_map, tts, seed)
+    result, _timing = await render_scene_audio_with_timing(
+        scene, voice_map, tts, seed, settings
+    )
     return result
 
 
@@ -111,13 +116,18 @@ async def render_scene_audio_with_timing(
     voice_map: dict[str | None, str],
     tts: TTSProvider,
     seed: int = 7,
+    settings: SceneRenderSettings | None = None,
 ) -> tuple[SceneRenderResult, SceneTiming]:
     """Render a scene AND expose the per-clip placement used to build it.
 
     Identical audio to :func:`render_scene_audio` — the timing is read off the
     very same speech-bus plan and SFX pass that produce the WAV, so every onset
     lines up with the rendered bytes to the millisecond.
+
+    ``settings`` carries the timeline editor's per-scene knobs (pacing, ambience
+    duck). Omitting it, or passing defaults, renders exactly as before.
     """
+    settings = settings or DEFAULT_RENDER_SETTINGS
     lines = [line for line in scene.lines if line.kind in _SPOKEN_KINDS and line.text.strip()]
 
     semaphore = asyncio.Semaphore(_CONCURRENCY)
@@ -158,7 +168,7 @@ async def render_scene_audio_with_timing(
             )
         )
 
-    plan = plan_speech_bus(clips)
+    plan = plan_speech_bus(clips, gap_scale=settings.pacing)
     total_ms = plan.total_ms + _TAIL_MS
     speech_bus = dsp.place_clips(
         [
@@ -178,7 +188,7 @@ async def render_scene_audio_with_timing(
 
     sfx_bus, sfx_markers = _build_sfx_bus(lines, plan, total_samples, seed, scene.ordinal)
 
-    mixed = dsp.mix_scene(speech_bus, bed, sfx_bus)
+    mixed = dsp.mix_scene(speech_bus, bed, sfx_bus, duck_ratio=settings.duck_ratio)
     duration_ms = round(len(mixed) / dsp.SR * 1000)
 
     rendered_clips = [

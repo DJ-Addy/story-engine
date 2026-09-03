@@ -20,6 +20,7 @@ from app.api.schemas import (
     ShotListOut,
     TimelineAmbienceSpan,
     TimelineDialogueClip,
+    TimelineEditRequest,
     TimelineSfxMarker,
     TimelineVisualClip,
 )
@@ -27,8 +28,9 @@ from app.continuity.model import Finding, SceneContext, ShotMeta
 from app.continuity.validator import validate_scene
 from app.costs import governor
 from app.ingest.elements import NormalizedScene, StoryGraph
-from app.render.audio.model import SceneTiming
+from app.render.audio.model import SceneRenderSettings, SceneTiming
 from app.render.audio.pipeline import render_scene_audio_with_timing
+from app.render.timeline_edits import TimelineEditError, apply_edits
 from app.shotlist.schema import SceneShotList
 
 router = APIRouter(prefix="/projects/{project_id}/scenes/{ordinal}", tags=["scenes"])
@@ -214,7 +216,12 @@ async def render_audio(
             ),
         ) from exc
 
-    result, timing = await render_scene_audio_with_timing(scene, _voice_map(scene), tts)
+    # Per-scene knobs the timeline editor wrote; a re-render after an edit is
+    # what makes that edit audible.
+    settings = repo.get_render_settings(project.id, ordinal)
+    result, timing = await render_scene_audio_with_timing(
+        scene, _voice_map(scene), tts, settings=settings
+    )
     project.cost_spent_cents += estimated_cents
     repo.save_audio_render(
         project.id,
@@ -244,7 +251,13 @@ def get_audio(
         raise HTTPException(
             status_code=404, detail=f"No audio rendered yet for scene {ordinal}"
         )
-    return Response(content=record.wav_bytes, media_type="audio/wav")
+    # The bytes are still the last real render, but a client that caches them
+    # needs to know the IR moved underneath.
+    return Response(
+        content=record.wav_bytes,
+        media_type="audio/wav",
+        headers={"X-Render-Stale": "true" if record.stale else "false"},
+    )
 
 
 def _visual_lane(
@@ -278,21 +291,49 @@ def _visual_lane(
     return lane
 
 
+def _dialogue_lane(
+    timing: SceneTiming, scene: NormalizedScene
+) -> list[TimelineDialogueClip]:
+    """Stored onsets, live line content.
+
+    Onsets and durations can only come from a render pass, but speaker, emotion
+    and text are IR facts an edit may have changed since. Reading them off the
+    scene means an attribution fix shows on the timeline immediately, while the
+    render's ``stale`` flag carries the (true) news that the WAV still has the
+    old voice. Lines the render knew but the IR no longer has fall back to the
+    render snapshot.
+    """
+    lines = {line.ordinal: line for line in scene.lines}
+    lane: list[TimelineDialogueClip] = []
+    for clip in timing.clips:
+        line = lines.get(clip.line_ordinal)
+        if line is None:
+            character, emotion, text = clip.character_name, clip.emotion, clip.text
+        else:
+            # Mirror the renderer's rule: only dialogue carries a speaker.
+            character = line.character_name if line.kind == "dialogue" else None
+            emotion, text = line.emotion, line.text
+        lane.append(
+            TimelineDialogueClip(
+                line_ordinal=clip.line_ordinal,
+                start_ms=clip.start_ms,
+                duration_ms=clip.duration_ms,
+                character=character,
+                emotion=emotion,
+                text=text,
+            )
+        )
+    return lane
+
+
 def _build_timeline(
-    record: AudioRenderRecord, scene: NormalizedScene, shotlist: SceneShotList | None
+    record: AudioRenderRecord,
+    scene: NormalizedScene,
+    shotlist: SceneShotList | None,
+    settings: SceneRenderSettings,
 ) -> SceneTimeline:
     timing = record.timing
-    dialogue = [
-        TimelineDialogueClip(
-            line_ordinal=clip.line_ordinal,
-            start_ms=clip.start_ms,
-            duration_ms=clip.duration_ms,
-            character=clip.character_name,
-            emotion=clip.emotion,
-            text=clip.text,
-        )
-        for clip in timing.clips
-    ]
+    dialogue = _dialogue_lane(timing, scene)
     ambience = [
         TimelineAmbienceSpan(start_ms=0, duration_ms=timing.duration_ms, tag=tag)
         for tag in timing.ambience_tags
@@ -308,6 +349,31 @@ def _build_timeline(
         ambience=ambience,
         sfx=sfx,
         visual=_visual_lane(timing, shotlist),
+        settings=settings,
+        stale=record.stale,
+        stale_reasons=list(record.stale_reasons),
+    )
+
+
+def _unrendered_timeline(
+    scene: NormalizedScene, settings: SceneRenderSettings
+) -> SceneTimeline:
+    """A scene with no render yet: the marker and the settings, no lanes.
+
+    Lane timings exist only as a product of a render pass, so there is nothing
+    honest to put in them before one has run.
+    """
+    return SceneTimeline(
+        scene_ordinal=scene.ordinal,
+        duration_ms=0,
+        markers=[
+            SceneMarker(scene_ordinal=scene.ordinal, start_ms=0, slugline=scene.slugline)
+        ],
+        dialogue=[],
+        ambience=[],
+        sfx=[],
+        visual=[],
+        settings=settings,
     )
 
 
@@ -325,4 +391,67 @@ def get_timeline(
         )
     shotlist_record = repo.get_shotlist(project.id, ordinal)
     shotlist = shotlist_record.shotlist if shotlist_record is not None else None
-    return _build_timeline(record, scene, shotlist)
+    return _build_timeline(
+        record, scene, shotlist, repo.get_render_settings(project.id, ordinal)
+    )
+
+
+@router.post("/timeline/edits", response_model=SceneTimeline)
+def post_timeline_edits(
+    ordinal: int,
+    body: TimelineEditRequest,
+    project: ProjectRecord = Depends(get_owned_project),
+    repo: Repository = Depends(get_repo),
+) -> SceneTimeline:
+    """Apply timeline edits to the IR and return the timeline they produce.
+
+    This is the editing surface of the render tier, so it takes the same rights
+    attestation the render endpoints do. No cost governor call: edits are pure
+    IR mutations and reach no provider — the guard belongs on the re-render that
+    follows.
+
+    A scene with no render yet still accepts edits (fix attribution first,
+    render once); it just has no lanes to hand back, so unlike GET /timeline
+    this does not 404 — the edits really were applied.
+    """
+    if not project.rights_attested:
+        raise HTTPException(
+            status_code=403,
+            detail="Rights not attested for this project; cannot edit the timeline",
+        )
+    # 404s a missing scene before anything is touched; the edited copy of the
+    # scene comes back out of the result below.
+    graph, _scene = _get_scene_or_404(repo, project.id, ordinal)
+    shotlist_record = repo.get_shotlist(project.id, ordinal)
+    shotlist = shotlist_record.shotlist if shotlist_record is not None else None
+    settings = repo.get_render_settings(project.id, ordinal)
+
+    try:
+        result = apply_edits(graph, ordinal, shotlist, settings, body.edits)
+    except TimelineEditError as exc:
+        raise HTTPException(
+            status_code=422,
+            detail=f"edit {exc.index}: {exc}" if exc.index is not None else str(exc),
+        ) from exc
+
+    if result.graph_changed:
+        repo.update_graph(project.id, result.graph)
+    if result.shotlist_changed and result.shotlist is not None:
+        repo.save_shotlist(project.id, ordinal, result.shotlist)
+    if result.settings_changed:
+        repo.save_render_settings(project.id, ordinal, result.settings)
+    if result.invalidates_audio:
+        repo.mark_audio_render_stale(project.id, ordinal, result.stale_reasons)
+
+    edited_scene = next(s for s in result.graph.scenes if s.ordinal == ordinal)
+    if result.shotlist_changed and result.shotlist is not None:
+        # Shot ordinals may have shifted under an insert, so the stored findings
+        # no longer point where they claim: re-derive them (continuity warns,
+        # never blocks, so this cannot fail the edit).
+        findings = _run_validator(project, result.graph, edited_scene, result.shotlist)
+        repo.replace_findings(project.id, ordinal, findings)
+
+    record = repo.get_audio_render(project.id, ordinal)
+    if record is None:
+        return _unrendered_timeline(edited_scene, result.settings)
+    return _build_timeline(record, edited_scene, result.shotlist, result.settings)

@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from typing import Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, ConfigDict, Field
 
 Role = Literal["narration", "dialogue"]
 
@@ -83,6 +83,43 @@ class RenderedSfx(BaseModel):
 
     at_ms: int
     name: str
+
+
+# ``dsp.duck``'s own default compressor ratio. Kept as a literal rather than an
+# import so this persisted-settings module stays free of the numpy DSP stack;
+# test_timeline_edits pins the two together.
+_DUCK_RATIO_AT_DEFAULT = 6.0
+
+
+class SceneRenderSettings(BaseModel):
+    """Per-scene render knobs the timeline editor writes and the renderer honors.
+
+    Defaults reproduce the pre-settings render exactly: ``pacing`` 1.0 leaves the
+    PRD gap table untouched and ``ambience_duck`` 0.5 maps to the DSP's own
+    default ducking ratio, so a scene nobody has edited renders byte-identical
+    audio.
+    """
+
+    model_config = ConfigDict(frozen=True)
+
+    # Multiplies every inter-clip gap on the speech bus. <1 tightens the scene
+    # ("tighten pacing"), >1 lets it breathe. Clip durations are TTS output and
+    # are never scaled — pacing is dead air only.
+    pacing: float = Field(default=1.0, ge=0.25, le=4.0)
+    # How hard ambience ducks under speech, 0 (no ducking at all) to 1 (hardest).
+    ambience_duck: float = Field(default=0.5, ge=0.0, le=1.0)
+
+    @property
+    def duck_ratio(self) -> float:
+        """``ambience_duck`` as a compressor ratio for ``dsp.duck``.
+
+        Linear from 1.0 (ratio 1 = unity gain = no duck) through the DSP default
+        at the 0.5 midpoint, so the default depth is a no-op on the audio.
+        """
+        return 1.0 + self.ambience_duck * 2.0 * (_DUCK_RATIO_AT_DEFAULT - 1.0)
+
+
+DEFAULT_RENDER_SETTINGS = SceneRenderSettings()
 
 
 class SceneTiming(BaseModel):

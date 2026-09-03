@@ -15,6 +15,8 @@ from app.adapters.base import Voice
 from app.ingest.elements import StoryGraph
 from app.judge.model import AnimaticJudgment, RankingResult, VoiceFitResult
 from app.judge.ranking import AnimaticCandidate, VoiceCandidate
+from app.render.audio.model import SceneRenderSettings
+from app.render.timeline_edits import TimelineEdit
 from app.shotlist.schema import ShotSpec
 
 GrammarProfile = Literal["classical", "handheld", "symmetrical", "anime"]
@@ -136,9 +138,10 @@ class SceneMarker(BaseModel):
 
 class SceneTimeline(BaseModel):
     """Structured, time-aligned lane data for one scene render, so a scrubbable
-    frontend timeline can line up with the rendered WAV. The dialogue/ambience/
-    sfx lanes come from the render pass; the visual lane is projected from the
-    scene's current shot list."""
+    frontend timeline can line up with the rendered WAV. Clip onsets and
+    durations come from the render pass; everything editable about a clip
+    (speaker, emotion, text) and the visual lane are read live off the IR, so an
+    edit shows up immediately and ``stale`` says the WAV has not caught up."""
 
     scene_ordinal: int
     duration_ms: int
@@ -147,6 +150,22 @@ class SceneTimeline(BaseModel):
     ambience: list[TimelineAmbienceSpan]
     sfx: list[TimelineSfxMarker]
     visual: list[TimelineVisualClip]
+    # Per-scene render knobs in force; the UI reads them back into its controls.
+    settings: SceneRenderSettings = Field(default_factory=SceneRenderSettings)
+    # True when a timeline edit invalidated the stored audio: the lanes are
+    # current, the WAV is not, and the scene needs a re-render.
+    stale: bool = False
+    stale_reasons: list[str] = Field(default_factory=list)
+
+
+class TimelineEditRequest(BaseModel):
+    """Body for POST .../timeline/edits: an ordered batch of IR edit ops.
+
+    Applied all-or-nothing (see app.render.timeline_edits) so a bad ordinal in
+    the middle of a batch cannot leave a half-edited scene.
+    """
+
+    edits: list[TimelineEdit] = Field(min_length=1, max_length=50)
 
 
 class VideoRenderRequest(BaseModel):
