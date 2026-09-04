@@ -18,8 +18,9 @@ Two schemas live here:
 
 from __future__ import annotations
 
+import threading
 import uuid
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 from decimal import Decimal
 from typing import Any
 
@@ -432,8 +433,35 @@ def _text_pk() -> Mapped[str]:
     return mapped_column(Text, primary_key=True)
 
 
+_utcnow_lock = threading.Lock()
+_utcnow_last: datetime | None = None
+
+
 def _utcnow() -> datetime:
-    return datetime.now(timezone.utc)
+    """UTC now, strictly increasing across calls within this process.
+
+    ``SqlAlchemyRepository.get_user_by_email`` breaks a duplicate-registration
+    tie by ordering on ``created_at`` (last registration wins, matching
+    ``InMemoryRepository``'s dict overwrite) - the primary key is a
+    client-generated uuid4 string, so it carries no chronological signal to
+    fall back on. Two rows minted from this default used to be able to land on
+    the exact same wall-clock microsecond (observed in practice: two
+    back-to-back ``create_user`` calls on this platform can both read
+    ``datetime.now()`` before the clock advances), which made "last one wins"
+    resolve arbitrarily by uuid string instead. Bumping a tied reading forward
+    by a microsecond keeps every timestamp this process hands out unique and
+    in call order, so that ordering is unambiguous again. This only holds
+    within one process - genuinely simultaneous writes from two different
+    Cloud Run instances have no single canonical "latest" regardless of how
+    this clock is implemented.
+    """
+    global _utcnow_last
+    with _utcnow_lock:
+        now = datetime.now(timezone.utc)
+        if _utcnow_last is not None and now <= _utcnow_last:
+            now = _utcnow_last + timedelta(microseconds=1)
+        _utcnow_last = now
+        return now
 
 
 def _touched_at() -> Mapped[datetime]:
