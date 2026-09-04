@@ -1,0 +1,7 @@
+# core.autocrlf=true on Windows would otherwise check these out with CRLF, and
+# a "#!/bin/bash\r" shebang fails inside a Linux container with the famously
+# unhelpful "bad interpreter" error. The repo is public and gets cloned on
+# Windows, so pin the files the container actually executes or parses.
+*.sh text eol=lf
+Dockerfile text eol=lf
+.dockerignore text eol=lf
