@@ -6,7 +6,12 @@ from fastapi import Depends, HTTPException
 from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 from app import config  # noqa: F401  # loads backend/.env before env reads
-from app.adapters.base import TerminalProviderError, TTSProvider, VideoProvider
+from app.adapters.base import (
+    LLMProvider,
+    TerminalProviderError,
+    TTSProvider,
+    VideoProvider,
+)
 from app.api import auth
 from app.api.repo import InMemoryRepository, ProjectRecord, Repository, UserRecord
 
@@ -22,55 +27,74 @@ def get_repo() -> Repository:
 
 
 def get_tts() -> TTSProvider:
-    """Default TTS provider, selected from the environment.
+    """Default TTS provider: Google Cloud Text-to-Speech (Gemini-TTS voices).
 
-    Whichever credential is present picks the provider, in priority order:
+    Selection is credential-based, not provider-based: a configured Google Cloud
+    project picks the adapter, and there is no keyless fallback, so this raises
+    when the project is unset. ``GOOGLE_APPLICATION_CREDENTIALS`` (or any other
+    Application Default Credentials source — gcloud login, or the metadata server
+    on Cloud Run/GCE) supplies the token; ``GOOGLE_CLOUD_PROJECT`` names the
+    billing/quota project.
 
-    1. ELEVENLABS_API_KEY -> ElevenLabs adapter (emotion via voice_settings).
-    2. AZURE_SPEECH_KEY + AZURE_SPEECH_REGION -> Azure neural adapter (real
-       emotion via SSML express-as).
-    3. otherwise -> the free, keyless Edge adapter.
-
-    ``app.config`` (imported at module load) has already merged backend/.env
-    into the environment. Adapters are imported lazily so offline test
-    collection never pulls in the aiohttp network stack; tests always override
-    this with app.adapters.fake.FakeTTS via app.dependency_overrides.
+    ``app.config`` (imported at module load) has already merged backend/.env into
+    the environment. The adapter is imported lazily so offline test collection
+    never pulls in the aiohttp/google-auth stack; tests always override this with
+    app.adapters.fake.FakeTTS via app.dependency_overrides.
     """
     import os
 
-    if os.environ.get("ELEVENLABS_API_KEY"):
-        from app.adapters.elevenlabs import ElevenLabsAdapter
+    if not os.environ.get("GOOGLE_CLOUD_PROJECT"):
+        raise TerminalProviderError(
+            "no TTS provider configured (set GOOGLE_CLOUD_PROJECT and "
+            "GOOGLE_APPLICATION_CREDENTIALS)"
+        )
 
-        return ElevenLabsAdapter()
+    from app.adapters.google_tts import GoogleTTSAdapter
 
-    if os.environ.get("AZURE_SPEECH_KEY") and os.environ.get("AZURE_SPEECH_REGION"):
-        from app.adapters.azure_tts import AzureTTSAdapter
-
-        return AzureTTSAdapter()
-
-    from app.adapters.edge import EdgeTTSAdapter
-
-    return EdgeTTSAdapter()
+    return GoogleTTSAdapter()
 
 
 def get_video() -> VideoProvider:
-    """Default video renderer, selected from the environment.
+    """Default video renderer: Veo on Vertex AI.
 
-    Runway is the only video provider for now, so selection is simple: a present
-    ``RUNWAY_API_KEY`` picks it. Unlike ``get_tts`` there is no keyless fallback
-    renderer, so this raises when no video provider is configured.
+    Same credential-based selection as ``get_tts``; Veo is region-pinned, so
+    ``GOOGLE_CLOUD_LOCATION`` (default ``us-central1``) also applies. Raises when
+    no Google Cloud project is configured.
 
     The adapter is imported lazily so offline test collection never pulls in the
-    aiohttp network stack.
+    aiohttp/google-auth stack.
     """
     import os
 
-    if os.environ.get("RUNWAY_API_KEY"):
-        from app.adapters.runway import RunwayAdapter
+    if not os.environ.get("GOOGLE_CLOUD_PROJECT"):
+        raise TerminalProviderError(
+            "no video provider configured (set GOOGLE_CLOUD_PROJECT and "
+            "GOOGLE_APPLICATION_CREDENTIALS)"
+        )
 
-        return RunwayAdapter()
+    from app.adapters.veo import VeoAdapter
 
-    raise TerminalProviderError("no video provider configured (set RUNWAY_API_KEY)")
+    return VeoAdapter()
+
+
+def get_llm() -> LLMProvider:
+    """Default LLM: Gemini on Vertex AI.
+
+    Powers the optional-LLM paths (novel conversion, shot-list generation, the
+    rubric judges), which fall back to deterministic heuristics when no provider
+    is injected. Same credential-based selection and lazy import as the others.
+    """
+    import os
+
+    if not os.environ.get("GOOGLE_CLOUD_PROJECT"):
+        raise TerminalProviderError(
+            "no LLM provider configured (set GOOGLE_CLOUD_PROJECT and "
+            "GOOGLE_APPLICATION_CREDENTIALS)"
+        )
+
+    from app.adapters.gemini import GeminiAdapter
+
+    return GeminiAdapter()
 
 
 def get_current_user(
