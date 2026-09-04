@@ -1,10 +1,20 @@
-"""Scene shot lists and continuity findings.
+"""Scene shot lists, continuity findings, and the scene audio render.
 
 POST /shotlist is the manual authoring path for M1; the LLM shot-list
 generator is a separate module and will feed the same endpoint contract.
+
+**Where the WAV lives.** A rendered scene is megabytes of audio and a container
+is neither durable nor roomy: with a bucket configured (:mod:`app.storage`) the
+render uploads its WAV and the repository keeps a zero-byte placeholder, so a
+restart no longer loses the take and a long session no longer accumulates them
+in RAM. ``GET /audio`` reads the bytes back on demand. With no bucket the WAV
+stays in the repository exactly as before — which is what lets the app run with
+no cloud account at all.
 """
 
 from __future__ import annotations
+
+import logging
 
 from fastapi import APIRouter, Depends, HTTPException, Response
 
@@ -32,6 +42,9 @@ from app.render.audio.model import SceneRenderSettings, SceneTiming
 from app.render.audio.pipeline import render_scene_audio_with_timing
 from app.render.timeline_edits import TimelineEditError, apply_edits
 from app.shotlist.schema import SceneShotList
+from app.storage import ObjectNotFound, ObjectStore, ObjectStoreError, get_object_store
+
+logger = logging.getLogger(__name__)
 
 router = APIRouter(prefix="/projects/{project_id}/scenes/{ordinal}", tags=["scenes"])
 
@@ -189,12 +202,43 @@ def patch_finding(
     return _finding_out(updated)
 
 
+async def _persist_wav(
+    store: ObjectStore | None, project_id: str, ordinal: int, wav_bytes: bytes
+) -> bytes:
+    """Park a freshly rendered WAV in the bucket; return what the repo should hold.
+
+    ``b""`` once the upload lands — the bucket is then the durable home and
+    keeping a second copy in the container's memory is exactly the cost this
+    exists to remove. ``wav_bytes`` unchanged when there is no bucket, and also
+    when the upload fails: a storage outage must not destroy audio the user just
+    paid a TTS provider to synthesize, so the render degrades to today's
+    in-memory behaviour and says so in the log.
+    """
+    if store is None or not wav_bytes:
+        return wav_bytes
+    try:
+        await store.upload(
+            store.settings.audio_object(project_id, ordinal), wav_bytes, "audio/wav"
+        )
+    except ObjectStoreError as exc:
+        logger.warning(
+            "scene audio for project %s scene %s could not be uploaded to object "
+            "storage (%s); keeping the bytes in the repository",
+            project_id,
+            ordinal,
+            exc,
+        )
+        return wav_bytes
+    return b""
+
+
 @router.post("/render/audio", response_model=AudioRenderOut, status_code=201)
 async def render_audio(
     ordinal: int,
     project: ProjectRecord = Depends(get_owned_project),
     repo: Repository = Depends(get_repo),
     tts: TTSProvider = Depends(get_tts),
+    store: ObjectStore | None = Depends(get_object_store),
 ) -> AudioRenderOut:
     # PRD rights gate: nothing renders without an attestation on file.
     if not project.rights_attested:
@@ -223,10 +267,11 @@ async def render_audio(
         scene, _voice_map(scene), tts, settings=settings
     )
     project.cost_spent_cents += estimated_cents
+    wav_bytes = await _persist_wav(store, project.id, ordinal, result.wav_bytes)
     repo.save_audio_render(
         project.id,
         ordinal,
-        wav_bytes=result.wav_bytes,
+        wav_bytes=wav_bytes,
         duration_ms=result.duration_ms,
         clip_count=result.clip_count,
         ambience_tags=result.ambience_tags,
@@ -241,20 +286,46 @@ async def render_audio(
 
 
 @router.get("/audio")
-def get_audio(
+async def get_audio(
     ordinal: int,
     project: ProjectRecord = Depends(get_owned_project),
     repo: Repository = Depends(get_repo),
+    store: ObjectStore | None = Depends(get_object_store),
 ) -> Response:
     record = repo.get_audio_render(project.id, ordinal)
     if record is None:
         raise HTTPException(
             status_code=404, detail=f"No audio rendered yet for scene {ordinal}"
         )
+    # An empty record means the render was uploaded rather than held here. The
+    # object key is derived from (project, scene) rather than stored, because
+    # AudioRenderRecord has nowhere to put it — see app.storage.settings.
+    wav_bytes = record.wav_bytes
+    if not wav_bytes:
+        if store is None:
+            raise HTTPException(
+                status_code=404,
+                detail=(
+                    f"Scene {ordinal} audio lives in object storage, which is not "
+                    "configured on this instance (set GCS_BUCKET)"
+                ),
+            )
+        try:
+            wav_bytes = await store.fetch(store.settings.audio_object(project.id, ordinal))
+        except ObjectNotFound as exc:
+            raise HTTPException(
+                status_code=404,
+                detail=f"Rendered audio is no longer in object storage: {exc}",
+            ) from exc
+        except ObjectStoreError as exc:
+            raise HTTPException(
+                status_code=502,
+                detail=f"Could not read the rendered audio from object storage: {exc}",
+            ) from exc
     # The bytes are still the last real render, but a client that caches them
     # needs to know the IR moved underneath.
     return Response(
-        content=record.wav_bytes,
+        content=wav_bytes,
         media_type="audio/wav",
         headers={"X-Render-Stale": "true" if record.stale else "false"},
     )
