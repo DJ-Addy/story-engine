@@ -20,6 +20,12 @@ dependencies = [
     "python-multipart>=0.0.9",
     "aiohttp>=3.9",
     "google-auth>=2.30",
+    # Google Cloud Agent Builder's code-first surface: the Agent Development
+    # Kit. Imported only by app/adapters/adk.py, and lazily, so the suite still
+    # collects and passes with it absent. The seam is written against 2.x
+    # module paths (google.adk.agents / .runners / .sessions / .tools), so the
+    # major is pinned: a 3.0 that moves them must be a deliberate upgrade.
+    "google-adk>=2.8,<3",
     "psycopg[binary]>=3.1",
     "numpy>=1.26",
     "soundfile>=0.12",

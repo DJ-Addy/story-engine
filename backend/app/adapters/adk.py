@@ -198,6 +198,17 @@ class AdkAgentRuntime:
     def model(self) -> str:
         return self._model
 
+    @property
+    def api_loader(self) -> Callable[[], AdkApi]:
+        """The loader this runtime was built with.
+
+        Public so :func:`runtime_info` can ask *this* runtime whether its SDK is
+        importable instead of re-checking the ambient one — the difference
+        between a truthful status endpoint and one that reports on a runtime
+        nobody is using.
+        """
+        return self._api_loader
+
     def available(self) -> bool:
         """True when the ADK is importable *and* a project is configured."""
         return bool(os.environ.get("GOOGLE_CLOUD_PROJECT")) and adk_installed(self._api_loader)
@@ -316,7 +327,13 @@ def runtime_info(
     api_loader: Callable[[], AdkApi] = load_adk,
 ) -> AdkRuntimeInfo:
     """Describe the ADK runtime without importing or calling anything heavy."""
-    runtime = runtime or AdkAgentRuntime(api_loader=api_loader)
+    if runtime is None:
+        runtime = AdkAgentRuntime(api_loader=api_loader)
+    else:
+        # A caller who handed us a runtime is asking about that one, so its
+        # loader decides "installed" — otherwise an injected runtime would be
+        # reported against whatever happens to be importable in this process.
+        api_loader = runtime.api_loader
     return AdkRuntimeInfo(
         installed=adk_installed(api_loader),
         project_configured=bool(os.environ.get("GOOGLE_CLOUD_PROJECT")),

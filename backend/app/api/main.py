@@ -16,6 +16,7 @@ from app.analytics.recorder import (
 )
 from app.analytics.settings import AnalyticsSettings
 from app.api.routers import (
+    agent,
     analytics,
     auth,
     judge,
@@ -72,6 +73,10 @@ def create_app() -> FastAPI:
     api.include_router(renders.router)
     api.include_router(judge.router)
     api.include_router(analytics.router)
+    # Two routers, one module: the runs are project-scoped, the network
+    # description is deployment-scoped (like /health) and takes no project.
+    api.include_router(agent.router)
+    api.include_router(agent.meta_router)
 
     app.include_router(api)
     return app
