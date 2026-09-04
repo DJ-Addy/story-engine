@@ -192,7 +192,10 @@ async def _stdio_session(settings: AnalyticsSettings) -> AsyncIterator[MCPSessio
 async def _http_session(settings: AnalyticsSettings) -> AsyncIterator[MCPSession]:
     """Attach to an already-running MCP endpoint over streamable HTTP."""
     from mcp import ClientSession
-    from mcp.client.streamable_http import streamablehttp_client
+    from mcp.client.streamable_http import (
+        create_mcp_http_client,
+        streamable_http_client,
+    )
 
     if not settings.url:
         raise ClickHouseUnavailable(
@@ -201,9 +204,14 @@ async def _http_session(settings: AnalyticsSettings) -> AsyncIterator[MCPSession
     headers = (
         {"Authorization": f"Bearer {settings.auth_token}"} if settings.auth_token else None
     )
-    async with streamablehttp_client(settings.url, headers=headers) as (read, write, _):
-        async with ClientSession(read, write) as session:
-            yield session
+    # mcp 2.x: the client no longer takes headers or yields a third element, so
+    # auth rides on an httpx client built by the SDK's own helper.
+    async with create_mcp_http_client(headers) as http_client:
+        async with streamable_http_client(
+            settings.url, http_client=http_client
+        ) as (read, write):
+            async with ClientSession(read, write) as session:
+                yield session
 
 
 def default_session_factory(settings: AnalyticsSettings) -> SessionFactory:

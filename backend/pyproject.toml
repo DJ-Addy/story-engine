@@ -27,6 +27,12 @@ dependencies = [
     # major is pinned: a 3.0 that moves them must be a deliberate upgrade.
     "google-adk>=2.8,<3",
     "psycopg[binary]>=3.1",
+    "python-dotenv>=1.0",
+    # ClickHouse track: the MCP client SDK, plus the official server the stdio
+    # transport launches as a child process (python -m mcp_clickhouse.main).
+    # Major pinned - 2.x renamed streamablehttp_client and changed its yield arity.
+    "mcp>=2.1,<3",
+    "mcp-clickhouse>=0.6",
     "numpy>=1.26",
     "soundfile>=0.12",
 ]
