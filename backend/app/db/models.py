@@ -5,21 +5,33 @@ are UUIDs generated server-side via gen_random_uuid(); timestamps are
 timestamptz. Schema creation is handled by Alembic (see
 backend/alembic/versions/0001_initial_schema.py), which also creates the
 btree_gist extension required by the character_variants exclusion constraint.
+
+Two schemas live here:
+
+* the normalized PRD tables (``users`` ... ``jobs``, migration 0001), the
+  target model for the ingest pipeline, not yet written to by anything;
+* the ``store_*`` record store (migration 0002), which is what
+  ``app.db.repository.SqlAlchemyRepository`` actually reads and writes so a
+  Cloud Run restart stops erasing every project. See the section header
+  further down for why it is separate and deliberately dialect-portable.
 """
 
 from __future__ import annotations
 
 import uuid
-from datetime import datetime
+from datetime import datetime, timezone
 from decimal import Decimal
 from typing import Any
 
 from sqlalchemy import (
+    JSON,
     BigInteger,
     Boolean,
+    DateTime,
     ForeignKey,
     Index,
     Integer,
+    LargeBinary,
     Numeric,
     Text,
     UniqueConstraint,
@@ -380,3 +392,262 @@ class Job(Base):
     finished_at: Mapped[datetime | None] = mapped_column(
         TIMESTAMP(timezone=True), nullable=True
     )
+
+
+# --------------------------------------------------------------------------
+# API record store
+# --------------------------------------------------------------------------
+#
+# Everything above models the fully normalized ingest target from PRD 3.2.
+# Nothing writes to it yet: the running API stores whole pydantic records
+# through ``app.api.repo.Repository`` (a story graph is one blob, not a scene /
+# line / shot tree), so migration 0001 alone would still lose every project on
+# a Cloud Run restart.
+#
+# The ``store_*`` tables below are the durable backing for that repository as
+# it exists today - one table per record type in ``app.api.repo``, field for
+# field. They are deliberately conservative:
+#
+#   * TEXT primary keys, because the repository mints ``str(uuid4())`` ids and
+#     hands them back as strings;
+#   * ``_JSON`` (JSONB on PostgreSQL, JSON elsewhere) for every pydantic
+#     payload, so adding a field to StoryGraph / SceneTiming / SceneShotList /
+#     SceneRenderSettings does not need a migration;
+#   * ``LargeBinary`` (BYTEA / BLOB) for rendered WAV, video and frame bytes;
+#   * no foreign keys. ``InMemoryRepository`` happily stores a shot list for a
+#     project id that does not exist, and the conformance suite pins that both
+#     implementations behave identically - referential integrity here would be
+#     a behavioural difference, not a safety net.
+#
+# When the normalized schema above is finally populated by the ingest pipeline,
+# these tables become the migration source, not a competitor.
+
+# JSONB on PostgreSQL (indexable, binary) and plain JSON everywhere else, which
+# is what lets the conformance suite run this schema on SQLite.
+_JSON = JSON().with_variant(JSONB(), "postgresql")
+
+
+def _text_pk() -> Mapped[str]:
+    """Client-generated uuid4 string, matching ``app.api.repo`` record ids."""
+    return mapped_column(Text, primary_key=True)
+
+
+def _utcnow() -> datetime:
+    return datetime.now(timezone.utc)
+
+
+def _touched_at() -> Mapped[datetime]:
+    return mapped_column(
+        DateTime(timezone=True), nullable=False, default=_utcnow, onupdate=_utcnow
+    )
+
+
+class StoredUser(Base):
+    """``app.api.repo.UserRecord``."""
+
+    __tablename__ = "store_users"
+    __table_args__ = (Index("ix_store_users_email_lower", "email_lower"),)
+
+    id: Mapped[str] = _text_pk()
+    email: Mapped[str] = mapped_column(Text, nullable=False)
+    # Case-folded lookup key mirroring InMemoryRepository's ``_users_by_email``.
+    # Not unique: the in-memory repository accepts a second registration for the
+    # same address (the auth router is what rejects it), so a unique index here
+    # would raise where the other implementation returns a record.
+    email_lower: Mapped[str] = mapped_column(Text, nullable=False)
+    password_hash: Mapped[str] = mapped_column(Text, nullable=False)
+    salt: Mapped[str] = mapped_column(Text, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=_utcnow
+    )
+
+
+class StoredProject(Base):
+    """``app.api.repo.ProjectRecord``."""
+
+    __tablename__ = "store_projects"
+    __table_args__ = (Index("ix_store_projects_owner_id", "owner_id"),)
+
+    id: Mapped[str] = _text_pk()
+    owner_id: Mapped[str] = mapped_column(Text, nullable=False)
+    title: Mapped[str] = mapped_column(Text, nullable=False)
+    grammar_profile: Mapped[str] = mapped_column(Text, nullable=False)
+    validator_mode: Mapped[str] = mapped_column(Text, nullable=False)
+    rights_attested: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    cost_cap_cents: Mapped[int] = mapped_column(Integer, nullable=False)
+    cost_spent_cents: Mapped[int] = mapped_column(Integer, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(
+        DateTime(timezone=True), nullable=False, default=_utcnow
+    )
+
+
+class StoredScript(Base):
+    """``app.api.repo.ScriptRecord`` - one (latest) script per project."""
+
+    __tablename__ = "store_scripts"
+    __table_args__ = (
+        UniqueConstraint("project_id", name="uq_store_scripts_project_id"),
+    )
+
+    id: Mapped[str] = _text_pk()
+    project_id: Mapped[str] = mapped_column(Text, nullable=False)
+    format: Mapped[str] = mapped_column(Text, nullable=False)
+    graph: Mapped[dict[str, Any]] = mapped_column(_JSON, nullable=False)
+    updated_at: Mapped[datetime] = _touched_at()
+
+
+class StoredShotList(Base):
+    """``app.api.repo.ShotListRecord`` - one per (project, scene)."""
+
+    __tablename__ = "store_shotlists"
+    __table_args__ = (
+        UniqueConstraint(
+            "project_id", "scene_ordinal", name="uq_store_shotlists_project_scene"
+        ),
+    )
+
+    id: Mapped[str] = _text_pk()
+    project_id: Mapped[str] = mapped_column(Text, nullable=False)
+    scene_ordinal: Mapped[int] = mapped_column(Integer, nullable=False)
+    shotlist: Mapped[dict[str, Any]] = mapped_column(_JSON, nullable=False)
+    updated_at: Mapped[datetime] = _touched_at()
+
+
+class StoredFinding(Base):
+    """``app.api.repo.FindingRecord``.
+
+    ``position`` is the index within the ``replace_findings`` batch that wrote
+    the row; ordering by it reproduces the insertion order that
+    ``InMemoryRepository.list_findings`` returns from its dict.
+    """
+
+    __tablename__ = "store_findings"
+    __table_args__ = (
+        Index(
+            "ix_store_findings_project_id_scene_ordinal", "project_id", "scene_ordinal"
+        ),
+    )
+
+    id: Mapped[str] = _text_pk()
+    project_id: Mapped[str] = mapped_column(Text, nullable=False)
+    scene_ordinal: Mapped[int] = mapped_column(Integer, nullable=False)
+    position: Mapped[int] = mapped_column(Integer, nullable=False)
+    rule_code: Mapped[str] = mapped_column(Text, nullable=False)
+    severity: Mapped[str] = mapped_column(Text, nullable=False)
+    message: Mapped[str] = mapped_column(Text, nullable=False)
+    shot_ordinal: Mapped[int | None] = mapped_column(Integer, nullable=True)
+    deliberate: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    deliberate_note: Mapped[str | None] = mapped_column(Text, nullable=True)
+
+
+class StoredAudioRender(Base):
+    """``app.api.repo.AudioRenderRecord`` - one (latest) render per scene."""
+
+    __tablename__ = "store_audio_renders"
+    __table_args__ = (
+        UniqueConstraint(
+            "project_id", "scene_ordinal", name="uq_store_audio_renders_project_scene"
+        ),
+    )
+
+    id: Mapped[str] = _text_pk()
+    project_id: Mapped[str] = mapped_column(Text, nullable=False)
+    scene_ordinal: Mapped[int] = mapped_column(Integer, nullable=False)
+    wav_bytes: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
+    duration_ms: Mapped[int] = mapped_column(Integer, nullable=False)
+    clip_count: Mapped[int] = mapped_column(Integer, nullable=False)
+    ambience_tags: Mapped[list[str]] = mapped_column(_JSON, nullable=False)
+    timing: Mapped[dict[str, Any]] = mapped_column(_JSON, nullable=False)
+    stale: Mapped[bool] = mapped_column(Boolean, nullable=False)
+    stale_reasons: Mapped[list[str]] = mapped_column(_JSON, nullable=False)
+    updated_at: Mapped[datetime] = _touched_at()
+
+
+class StoredRenderSettings(Base):
+    """``app.render.audio.model.SceneRenderSettings`` per (project, scene).
+
+    An absent row means "engine defaults"; the repository never writes a row it
+    was not explicitly asked to save.
+    """
+
+    __tablename__ = "store_render_settings"
+    __table_args__ = (
+        UniqueConstraint(
+            "project_id", "scene_ordinal", name="uq_store_render_settings_project_scene"
+        ),
+    )
+
+    id: Mapped[str] = _text_pk()
+    project_id: Mapped[str] = mapped_column(Text, nullable=False)
+    scene_ordinal: Mapped[int] = mapped_column(Integer, nullable=False)
+    settings: Mapped[dict[str, Any]] = mapped_column(_JSON, nullable=False)
+    updated_at: Mapped[datetime] = _touched_at()
+
+
+class StoredVideoRender(Base):
+    """``app.api.repo.VideoRenderRecord`` - latest per (project, scene, shot).
+
+    ``video_bytes`` is empty when the provider returned URLs only; both cases
+    are stored so a redeploy does not lose a render that cost real money.
+    """
+
+    __tablename__ = "store_video_renders"
+    __table_args__ = (
+        UniqueConstraint(
+            "project_id",
+            "scene_ordinal",
+            "shot_ordinal",
+            name="uq_store_video_renders_project_scene_shot",
+        ),
+    )
+
+    id: Mapped[str] = _text_pk()
+    project_id: Mapped[str] = mapped_column(Text, nullable=False)
+    scene_ordinal: Mapped[int] = mapped_column(Integer, nullable=False)
+    shot_ordinal: Mapped[int] = mapped_column(Integer, nullable=False)
+    video_bytes: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
+    output_urls: Mapped[list[str]] = mapped_column(_JSON, nullable=False)
+    duration_ms: Mapped[int] = mapped_column(Integer, nullable=False)
+    cost_cents: Mapped[int] = mapped_column(Integer, nullable=False)
+    provider: Mapped[str] = mapped_column(Text, nullable=False)
+    model: Mapped[str] = mapped_column(Text, nullable=False)
+    source: Mapped[str] = mapped_column(Text, nullable=False)
+    updated_at: Mapped[datetime] = _touched_at()
+
+
+class StoredShotFrame(Base):
+    """Previz board/frame image bytes per (project, scene, shot)."""
+
+    __tablename__ = "store_shot_frames"
+    __table_args__ = (
+        UniqueConstraint(
+            "project_id",
+            "scene_ordinal",
+            "shot_ordinal",
+            name="uq_store_shot_frames_project_scene_shot",
+        ),
+    )
+
+    id: Mapped[str] = _text_pk()
+    project_id: Mapped[str] = mapped_column(Text, nullable=False)
+    scene_ordinal: Mapped[int] = mapped_column(Integer, nullable=False)
+    shot_ordinal: Mapped[int] = mapped_column(Integer, nullable=False)
+    image_bytes: Mapped[bytes] = mapped_column(LargeBinary, nullable=False)
+    updated_at: Mapped[datetime] = _touched_at()
+
+
+#: Every table the API record store owns. ``app.db.repository`` and the
+#: conformance suite create exactly these - the normalized PRD tables above use
+#: PostgreSQL-only types (pg enums, arrays, int4range, gist exclusion) and
+#: cannot be emitted on any other dialect.
+STORE_TABLES = [
+    StoredUser.__table__,
+    StoredProject.__table__,
+    StoredScript.__table__,
+    StoredShotList.__table__,
+    StoredFinding.__table__,
+    StoredAudioRender.__table__,
+    StoredRenderSettings.__table__,
+    StoredVideoRender.__table__,
+    StoredShotFrame.__table__,
+]

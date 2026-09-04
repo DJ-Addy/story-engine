@@ -15,14 +15,51 @@ from app.adapters.base import (
 from app.api import auth
 from app.api.repo import InMemoryRepository, ProjectRecord, Repository, UserRecord
 
-# Module-level singleton so all requests share state; tests override get_repo
-# with a fresh InMemoryRepository via app.dependency_overrides.
-_repo: Repository = InMemoryRepository()
+# Process-wide singleton so all requests share state, built on first use rather
+# than at import: constructing the SQL repository imports the database driver,
+# and import time is exactly when offline test collection must not do that.
+# Tests override get_repo with a fresh InMemoryRepository via
+# app.dependency_overrides and never touch this.
+_repo: Repository | None = None
 
 _bearer = HTTPBearer(auto_error=False)
 
 
+def _build_repo() -> Repository:
+    """SqlAlchemyRepository when a database is configured, else in-memory.
+
+    Selection is configuration-based, same as the provider dependencies below:
+    ``DATABASE_URL`` (or Cloud Run's ``INSTANCE_UNIX_SOCKET`` /
+    ``CLOUD_SQL_CONNECTION_NAME`` + ``DB_USER`` / ``DB_PASS`` / ``DB_NAME``,
+    which resolve to a Cloud SQL unix-socket URL) picks Postgres; nothing
+    configured keeps the dict-backed repository, which is what every test runs
+    against. ``STORY_ENGINE_REPO=memory`` forces in-memory regardless.
+
+    Both the resolver and the engine factory are imported lazily so a machine
+    without psycopg installed can still import the app and collect tests -
+    ``create_engine`` is what pulls in the DBAPI, and it only runs on the
+    configured path.
+    """
+    from app.db.session import (
+        create_engine_from_url,
+        resolve_database_url,
+        should_create_schema,
+    )
+
+    url = resolve_database_url()
+    if url is None:
+        return InMemoryRepository()
+
+    from app.db.repository import SqlAlchemyRepository
+
+    engine = create_engine_from_url(url)
+    return SqlAlchemyRepository(engine, create_schema=should_create_schema())
+
+
 def get_repo() -> Repository:
+    global _repo
+    if _repo is None:
+        _repo = _build_repo()
     return _repo
 
 
