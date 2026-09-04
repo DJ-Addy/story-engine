@@ -1,0 +1,31 @@
+# Build context hygiene: everything here either bloats the context, leaks
+# secrets, or would shadow what the build stages produce themselves.
+
+.git
+.gitignore
+**/.DS_Store
+
+# Never ship credentials. .env is gitignored; it must not reach an image layer.
+**/.env
+**/.env.*
+!**/.env.example
+
+# Rebuilt inside the image.
+frontend/node_modules
+frontend/.next
+backend/.venv
+**/__pycache__
+**/*.pyc
+**/*.egg-info
+
+# Not needed at runtime.
+backend/tests
+backend/out
+docs
+*.md
+!README.md
+
+# Local tooling
+.claude
+.vscode
+.idea

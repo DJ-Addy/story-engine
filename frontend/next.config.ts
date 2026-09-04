@@ -10,6 +10,9 @@ import type { NextConfig } from "next";
 const API_PROXY_TARGET = process.env.API_PROXY_TARGET ?? "http://127.0.0.1:8000";
 
 const nextConfig: NextConfig = {
+  // Emits .next/standalone: server.js plus only the modules it actually
+  // imports, so the Cloud Run image carries no node_modules and no npm.
+  output: "standalone",
   async rewrites() {
     return [
       {
