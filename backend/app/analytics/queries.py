@@ -165,22 +165,47 @@ def bake_offs_sql(database: str, project_id: str, limit: int | None = None) -> s
     Every ``/judge/rank/*`` call writes its candidates under a shared
     ``run_id``, so the leaderboard reassembles itself with a ``GROUP BY``.
     ``argMin(..., candidate_rank)`` picks rank 1 without a self-join.
+
+    The runner-up is rank *2*, which ``argMax(score, candidate_rank)`` does not
+    give: that returns the score at the highest rank, i.e. last place. The two
+    coincide only in a two-candidate run, so with three or more the margin used
+    to be measured against the worst candidate and overstated the win. Sorting
+    the (rank, score) pairs and taking the second element is the fix. A run with
+    a single candidate has no runner-up at all; it falls back to element 1 so
+    the margin is 0, which understates rather than inventing a landslide.
     """
     return f"""
 SELECT
     run_id,
     judge,
-    min(event_time) AS ran_at,
-    count() AS candidates,
-    argMin(candidate_label, candidate_rank) AS winner,
-    round(argMin(score, candidate_rank), 3) AS winner_score,
-    round(argMax(score, candidate_rank), 3) AS runner_up_score,
-    round(argMin(score, candidate_rank) - argMax(score, candidate_rank), 3) AS margin
-FROM {_judge_scores(database)}
-WHERE project_id = {sql_literal(project_id)}
-  AND mode = 'ranking'
-  AND subject_kind = 'overall'
-GROUP BY run_id, judge
+    ran_at,
+    candidates,
+    winner,
+    winner_score,
+    runner_up_score,
+    round(winner_score - runner_up_score, 3) AS margin
+FROM
+(
+    SELECT
+        run_id,
+        judge,
+        min(event_time) AS ran_at,
+        count() AS candidates,
+        argMin(candidate_label, candidate_rank) AS winner,
+        round(argMin(score, candidate_rank), 3) AS winner_score,
+        round(
+            arrayElement(
+                arraySort(groupArray((candidate_rank, score))),
+                if(count() > 1, 2, 1)
+            ).2,
+            3
+        ) AS runner_up_score
+    FROM {_judge_scores(database)}
+    WHERE project_id = {sql_literal(project_id)}
+      AND mode = 'ranking'
+      AND subject_kind = 'overall'
+    GROUP BY run_id, judge
+)
 ORDER BY ran_at DESC
 LIMIT {clamp_limit(limit)}
 """.strip()
