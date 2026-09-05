@@ -311,8 +311,19 @@ export interface TimelineLanes {
 }
 
 /** Everything the timeline editor needs to open, in one payload. */
+/**
+ * Where a timeline's onsets came from. `rendered` is measured against a stored
+ * WAV to the millisecond; `estimated` is planned from the script by the same
+ * planner, using a reading-speed heuristic for durations, because no render
+ * exists yet. The editor is fully usable either way, but an estimate must never
+ * be presented as a measurement.
+ */
+export type TimingSource = "rendered" | "estimated";
+
 export interface TimelineData {
   projectId: string;
+  /** Whether the onsets below are measured or planned. */
+  timingSource: TimingSource;
   /** Which scene these lanes belong to. The render endpoints address a shot by
    * (scene_ordinal, shot_ordinal), so the visual lane is useless without it. */
   sceneOrdinal: number;

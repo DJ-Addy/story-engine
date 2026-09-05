@@ -121,6 +121,7 @@ interface FindingWire {
 /** backend `SceneTimeline` — the four lanes that back the timeline editor. */
 interface SceneTimelineWire {
   scene_ordinal: number;
+  timing_source: "rendered" | "estimated";
   duration_ms: number;
   markers: { scene_ordinal: number; start_ms: number; slugline: string | null }[];
   dialogue: {
@@ -422,6 +423,10 @@ function toTimeline(
   return {
     projectId,
     sceneOrdinal: wire.scene_ordinal,
+    // Older backends predate the field; treating an absent value as "estimated"
+    // is the safe default, because the failure that matters is showing a guess
+    // as a measurement, never the reverse.
+    timingSource: wire.timing_source === "rendered" ? "rendered" : "estimated",
     sceneTitle: wire.markers[0]?.slugline ?? `Scene ${wire.scene_ordinal}`,
     durationMs: wire.duration_ms,
     scenes,

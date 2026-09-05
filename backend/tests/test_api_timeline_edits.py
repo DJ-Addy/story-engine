@@ -433,7 +433,13 @@ def test_insert_shot_without_a_shot_list_is_422(client, sample_fountain):
 # -- editing before a render -------------------------------------------------
 
 
-def test_edits_apply_before_any_render_and_return_empty_lanes(client, sample_fountain):
+def test_edits_apply_before_any_render_and_return_estimated_lanes(client, sample_fountain):
+    """An edit made before any render is visible immediately, on planned lanes.
+
+    This is what makes the timeline editor usable on a deployment that has never
+    spent TTS credits: the lanes come from the script, and ``timing_source``
+    keeps them from being mistaken for measurements.
+    """
     headers = auth_headers(client)
     project_id = setup_scene(client, headers, sample_fountain, render=False)
     body = client.post(
@@ -445,9 +451,12 @@ def test_edits_apply_before_any_render_and_return_empty_lanes(client, sample_fou
         headers=headers,
     ).json()
 
-    # No render to project, but the edit stuck and the settings come back.
-    assert body["duration_ms"] == 0
-    assert body["dialogue"] == [] and body["visual"] == []
+    assert body["timing_source"] == "estimated"
+    assert body["duration_ms"] > 0
+    # The edit shows on the lane without a render having happened.
+    assert next(c for c in body["dialogue"] if c["line_ordinal"] == 3)["character"] == "TOM"
+    # No shot list was uploaded, so the visual lane has nothing to place.
+    assert body["visual"] == []
     assert body["markers"][0]["slugline"] == "EXT. HARBOR TOWN - NIGHT"
     assert body["settings"]["pacing"] == 0.8
     assert body["stale"] is False  # nothing rendered, so nothing to invalidate

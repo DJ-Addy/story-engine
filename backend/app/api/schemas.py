@@ -136,14 +136,31 @@ class SceneMarker(BaseModel):
     slugline: str | None = None
 
 
+TimingSource = Literal["rendered", "estimated"]
+
+
 class SceneTimeline(BaseModel):
-    """Structured, time-aligned lane data for one scene render, so a scrubbable
-    frontend timeline can line up with the rendered WAV. Clip onsets and
-    durations come from the render pass; everything editable about a clip
-    (speaker, emotion, text) and the visual lane are read live off the IR, so an
-    edit shows up immediately and ``stale`` says the WAV has not caught up."""
+    """Structured, time-aligned lane data for one scene, so a scrubbable
+    frontend timeline can line up with the rendered WAV. Everything editable
+    about a clip (speaker, emotion, text) and the visual lane are read live off
+    the IR, so an edit shows up immediately and ``stale`` says the WAV has not
+    caught up.
+
+    ``timing_source`` says where the onsets came from and is never defaulted:
+
+    * ``"rendered"`` — measured from a render pass, aligned to the stored WAV
+      to the millisecond.
+    * ``"estimated"`` — planned from the script by
+      :mod:`app.render.audio.estimate` because no render exists yet. The lanes
+      are real (same planner, same gap table, same shot coverage) but the
+      durations are a reading-speed heuristic, so no client may present them as
+      measured. ``duration_ms`` and every onset move once audio is rendered.
+    """
 
     scene_ordinal: int
+    # Which of the two the onsets below are. Required: a caller that forgets to
+    # say cannot accidentally pass an estimate off as a measurement.
+    timing_source: TimingSource
     duration_ms: int
     markers: list[SceneMarker]
     dialogue: list[TimelineDialogueClip]

@@ -21,19 +21,18 @@ from app.nlp.sound_events import detect_sound_events
 from app.render.audio import dsp, sfx
 from app.render.audio.model import (
     DEFAULT_RENDER_SETTINGS,
+    SPEECH_TAIL_MS,
     RenderedClip,
     RenderedSfx,
     SceneRenderSettings,
     SceneTiming,
-    SpeechClip,
 )
-from app.render.audio.timing import plan_speech_bus
+from app.render.audio.timing import plan_speech_bus, speech_clips, spoken_lines
 
 _CONCURRENCY = 4
 _AMBIENCE_BASE_S = 20.0  # synth this much bed, then loop to scene length
-_TAIL_MS = 1200  # let the ambience breathe after the last line
+_TAIL_MS = SPEECH_TAIL_MS  # let the ambience breathe after the last line
 
-_SPOKEN_KINDS = {"dialogue", "action", "narration"}
 # Lines whose description can trigger a foreground sound event.
 _EVENT_KINDS = {"action", "narration"}
 _SFX_GAIN = 0.6  # foreground SFX level before the final loudness/limit stage
@@ -128,7 +127,7 @@ async def render_scene_audio_with_timing(
     duck). Omitting it, or passing defaults, renders exactly as before.
     """
     settings = settings or DEFAULT_RENDER_SETTINGS
-    lines = [line for line in scene.lines if line.kind in _SPOKEN_KINDS and line.text.strip()]
+    lines = spoken_lines(scene)
 
     semaphore = asyncio.Semaphore(_CONCURRENCY)
 
@@ -147,26 +146,13 @@ async def render_scene_audio_with_timing(
 
     sample_arrays = [_clip_samples(result) for result in results]
 
-    clips: list[SpeechClip] = []
-    block_id = -1
-    prev_speaker: str | None = None
-    prev_kind: str | None = None
-    for line, samples in zip(lines, sample_arrays, strict=True):
-        speaker = line.character_name if line.kind == "dialogue" else None
-        # New block whenever the speaker or narration/dialogue role changes.
-        if block_id < 0 or speaker != prev_speaker or line.kind != prev_kind:
-            block_id += 1
-        prev_speaker, prev_kind = speaker, line.kind
-        clips.append(
-            SpeechClip(
-                line_ordinal=line.ordinal,
-                character_name=speaker,
-                duration_ms=round(len(samples) / dsp.SR * 1000),
-                beat_index=0,
-                scene_ordinal=scene.ordinal,
-                block_id=block_id,
-            )
-        )
+    # Measured durations, then the shared block-grouping rule the estimator
+    # also uses (app.render.audio.timing.speech_clips).
+    clips = speech_clips(
+        lines,
+        [round(len(samples) / dsp.SR * 1000) for samples in sample_arrays],
+        scene.ordinal,
+    )
 
     plan = plan_speech_bus(clips, gap_scale=settings.pacing)
     total_ms = plan.total_ms + _TAIL_MS

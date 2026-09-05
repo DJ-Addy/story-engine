@@ -23,6 +23,28 @@ function ClockReadout() {
   );
 }
 
+/**
+ * Says whether the onsets on screen were measured or planned.
+ *
+ * Only shown when they are estimated. A rendered timeline is the expected case
+ * and needs no announcement, but an estimate silently passing as a measurement
+ * is the failure worth guarding against — the lanes are real, the durations are
+ * a reading-speed heuristic, and everything shifts once audio is rendered.
+ */
+function TimingSourceChip() {
+  const timingSource = useTimelineStore((s) => s.data?.timingSource ?? null);
+  if (timingSource !== "estimated") return null;
+  return (
+    <span
+      title="Planned from the script, not measured. Render this scene's audio for exact onsets."
+      className="inline-flex items-center gap-1.5 rounded-md border border-amber-500/25 bg-amber-500/10 px-2 py-1 text-[10px] font-medium uppercase tracking-wider text-amber-300/90"
+    >
+      <span aria-hidden>◷</span>
+      estimated timings
+    </span>
+  );
+}
+
 const CTRL =
   "flex h-8 w-8 items-center justify-center rounded-md border border-[var(--hairline)] bg-[var(--surface-3)] text-zinc-300 transition-colors hover:border-[var(--hairline-strong)] hover:text-zinc-50 disabled:cursor-not-allowed disabled:opacity-40";
 
@@ -93,6 +115,7 @@ export default function TransportBar({
       <div className="h-6 w-px bg-[var(--hairline)]" aria-hidden />
 
       <ClockReadout />
+      <TimingSourceChip />
 
       <div className="ml-auto flex items-center gap-3">
         {/* Zoom */}

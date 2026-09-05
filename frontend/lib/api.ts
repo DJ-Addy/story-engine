@@ -237,6 +237,7 @@ class MockApi implements StoryEngineApi {
     return {
       projectId: projectId || t.projectId,
       sceneOrdinal: t.sceneOrdinal,
+      timingSource: t.timingSource,
       sceneTitle: t.sceneTitle,
       durationMs: t.durationMs,
       scenes: t.scenes.map((s) => ({ ...s })),

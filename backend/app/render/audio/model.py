@@ -8,6 +8,12 @@ from pydantic import BaseModel, ConfigDict, Field
 
 Role = Literal["narration", "dialogue"]
 
+# Silence left after the last spoken clip so the ambience bed can breathe. It
+# lives here rather than in the renderer because the estimator
+# (:mod:`app.render.audio.estimate`) must add the same tail to produce a scene
+# length comparable with a real render's.
+SPEECH_TAIL_MS = 1200
+
 
 class SpeechClip(BaseModel):
     """One rendered speech clip in script order.

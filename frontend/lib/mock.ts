@@ -434,6 +434,8 @@ export const MOCK_TIMELINE: TimelineData = {
   // preamble), so the demo scene is 1 — the same scene `parseSceneRef` resolves
   // a bare project id to in httpApi.ts.
   sceneOrdinal: 1,
+  // Hand-authored fixture timings, not a real render — the badge should say so.
+  timingSource: "estimated" as const,
   sceneTitle: MOCK_SCENE_TITLE,
   durationMs: 60000,
   scenes: [

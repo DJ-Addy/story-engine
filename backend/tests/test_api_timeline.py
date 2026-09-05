@@ -96,12 +96,133 @@ def _shotlist_for_scene1():
     }
 
 
-def test_timeline_404_before_render(client, sample_fountain):
+def test_timeline_before_render_is_estimated_not_404(client, sample_fountain):
+    """No render is not a missing scene: the editor must still be usable.
+
+    A deployment nobody has rendered on is what a reviewer opens first, so the
+    endpoint plans the scene from the script instead of refusing.
+    """
     headers = auth_headers(client)
     project_id = make_project(client, headers)
     upload_script(client, headers, project_id, sample_fountain)
+
     r = client.get(f"/api/v1/projects/{project_id}/scenes/1/timeline", headers=headers)
-    assert r.status_code == 404
+    assert r.status_code == 200
+    body = r.json()
+
+    assert body["timing_source"] == "estimated"
+    assert body["duration_ms"] > 0
+    assert body["dialogue"], "estimated lanes must carry the scene's spoken lines"
+    assert body["markers"][0]["slugline"] == "EXT. HARBOR TOWN - NIGHT"
+    # Nothing was rendered, so there is no WAV to have fallen behind.
+    assert body["stale"] is False
+
+
+def test_estimated_timeline_never_runs_the_render_pipeline(
+    client, sample_fountain, monkeypatch
+):
+    """The estimated path must not synthesize, so it cannot spend credits."""
+    import app.api.routers.scenes as scenes_module
+
+    def _explode(*args, **kwargs):
+        raise AssertionError("the estimated timeline called the render pipeline")
+
+    monkeypatch.setattr(scenes_module, "render_scene_audio_with_timing", _explode)
+
+    headers = auth_headers(client)
+    project_id = make_project(client, headers)
+    upload_script(client, headers, project_id, sample_fountain)
+
+    r = client.get(f"/api/v1/projects/{project_id}/scenes/1/timeline", headers=headers)
+    assert r.status_code == 200
+    assert r.json()["timing_source"] == "estimated"
+
+
+def test_rendered_timeline_reports_itself_as_rendered(client, sample_fountain):
+    """The flag has to flip, or the estimate is indistinguishable from truth."""
+    headers = auth_headers(client)
+    project_id = make_project(client, headers)
+    upload_script(client, headers, project_id, sample_fountain)
+
+    before = client.get(
+        f"/api/v1/projects/{project_id}/scenes/1/timeline", headers=headers
+    ).json()
+    assert before["timing_source"] == "estimated"
+
+    assert (
+        client.post(
+            f"/api/v1/projects/{project_id}/scenes/1/render/audio", headers=headers
+        ).status_code
+        == 201
+    )
+
+    after = client.get(
+        f"/api/v1/projects/{project_id}/scenes/1/timeline", headers=headers
+    ).json()
+    assert after["timing_source"] == "rendered"
+    # Estimated durations are a reading-speed guess; measured ones come from the
+    # synthesized clips, so the two should not be expected to agree.
+    assert after["duration_ms"] != before["duration_ms"]
+
+
+def test_estimated_dialogue_clips_are_ordered_and_do_not_overlap(
+    client, sample_fountain
+):
+    headers = auth_headers(client)
+    project_id = make_project(client, headers)
+    upload_script(client, headers, project_id, sample_fountain)
+
+    clips = client.get(
+        f"/api/v1/projects/{project_id}/scenes/1/timeline", headers=headers
+    ).json()["dialogue"]
+    assert len(clips) >= 2
+
+    for earlier, later in zip(clips, clips[1:], strict=False):
+        assert earlier["start_ms"] <= later["start_ms"]
+        # The planner inserts a gap between clips, so a clip never runs into
+        # the next one's onset.
+        assert earlier["start_ms"] + earlier["duration_ms"] <= later["start_ms"]
+
+
+def test_estimated_timeline_fills_the_visual_lane_from_the_shotlist(
+    client, sample_fountain
+):
+    """The video editor is the reason this endpoint must work unrendered."""
+    headers = auth_headers(client)
+    project_id = make_project(client, headers)
+    upload_script(client, headers, project_id, sample_fountain)
+    assert (
+        client.post(
+            f"/api/v1/projects/{project_id}/scenes/1/shotlist",
+            json=_shotlist_for_scene1(),
+            headers=headers,
+        ).status_code
+        in (200, 201)
+    )
+
+    body = client.get(
+        f"/api/v1/projects/{project_id}/scenes/1/timeline", headers=headers
+    ).json()
+    assert body["timing_source"] == "estimated"
+    assert body["visual"], "shots must land on the lane without a render"
+    for clip in body["visual"]:
+        assert clip["duration_ms"] > 0
+
+
+def test_estimating_a_scene_with_no_spoken_lines_is_not_an_error(sample_fountain):
+    """Only a slugline and a transition: nothing to voice, still a valid scene."""
+    from app.render.audio.estimate import estimate_scene_timing
+
+    fountain = """EXT. EMPTY PIER - DAWN
+
+CUT TO:
+"""
+    graph = normalize(parse_fountain(fountain))
+    scene = graph.scenes[0]
+
+    timing = estimate_scene_timing(scene)
+    assert timing.clips == []
+    assert timing.duration_ms >= 0
 
 
 def test_timeline_missing_scene_404(client, sample_fountain):

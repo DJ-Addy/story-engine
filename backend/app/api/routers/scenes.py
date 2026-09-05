@@ -33,11 +33,13 @@ from app.api.schemas import (
     TimelineEditRequest,
     TimelineSfxMarker,
     TimelineVisualClip,
+    TimingSource,
 )
 from app.continuity.model import Finding, SceneContext, ShotMeta
 from app.continuity.validator import validate_scene
 from app.costs import governor
 from app.ingest.elements import NormalizedScene, StoryGraph
+from app.render.audio.estimate import estimate_scene_timing
 from app.render.audio.model import SceneRenderSettings, SceneTiming
 from app.render.audio.pipeline import render_scene_audio_with_timing
 from app.render.timeline_edits import TimelineEditError, apply_edits
@@ -397,54 +399,80 @@ def _dialogue_lane(
     return lane
 
 
+def _timeline_from_timing(
+    timing: SceneTiming,
+    scene: NormalizedScene,
+    shotlist: SceneShotList | None,
+    settings: SceneRenderSettings,
+    *,
+    timing_source: TimingSource,
+    stale: bool = False,
+    stale_reasons: list[str] | None = None,
+) -> SceneTimeline:
+    """Project one SceneTiming onto the lanes, whatever produced it.
+
+    Rendered and estimated timings are the same shape, so they go through one
+    projection: the lanes cannot drift apart, and the only thing that varies is
+    ``timing_source`` and whether staleness applies.
+    """
+    return SceneTimeline(
+        scene_ordinal=timing.scene_ordinal,
+        timing_source=timing_source,
+        duration_ms=timing.duration_ms,
+        markers=[
+            SceneMarker(scene_ordinal=scene.ordinal, start_ms=0, slugline=scene.slugline)
+        ],
+        dialogue=_dialogue_lane(timing, scene),
+        ambience=[
+            TimelineAmbienceSpan(start_ms=0, duration_ms=timing.duration_ms, tag=tag)
+            for tag in timing.ambience_tags
+        ],
+        sfx=[TimelineSfxMarker(at_ms=marker.at_ms, name=marker.name) for marker in timing.sfx],
+        visual=_visual_lane(timing, shotlist),
+        settings=settings,
+        stale=stale,
+        stale_reasons=list(stale_reasons or []),
+    )
+
+
 def _build_timeline(
     record: AudioRenderRecord,
     scene: NormalizedScene,
     shotlist: SceneShotList | None,
     settings: SceneRenderSettings,
 ) -> SceneTimeline:
-    timing = record.timing
-    dialogue = _dialogue_lane(timing, scene)
-    ambience = [
-        TimelineAmbienceSpan(start_ms=0, duration_ms=timing.duration_ms, tag=tag)
-        for tag in timing.ambience_tags
-    ]
-    sfx = [TimelineSfxMarker(at_ms=marker.at_ms, name=marker.name) for marker in timing.sfx]
-    return SceneTimeline(
-        scene_ordinal=timing.scene_ordinal,
-        duration_ms=timing.duration_ms,
-        markers=[
-            SceneMarker(scene_ordinal=scene.ordinal, start_ms=0, slugline=scene.slugline)
-        ],
-        dialogue=dialogue,
-        ambience=ambience,
-        sfx=sfx,
-        visual=_visual_lane(timing, shotlist),
-        settings=settings,
+    return _timeline_from_timing(
+        record.timing,
+        scene,
+        shotlist,
+        settings,
+        timing_source="rendered",
         stale=record.stale,
         stale_reasons=list(record.stale_reasons),
     )
 
 
-def _unrendered_timeline(
-    scene: NormalizedScene, settings: SceneRenderSettings
+def _estimated_timeline(
+    scene: NormalizedScene,
+    shotlist: SceneShotList | None,
+    settings: SceneRenderSettings,
 ) -> SceneTimeline:
-    """A scene with no render yet: the marker and the settings, no lanes.
+    """A scene with no render yet, laid out from the script alone.
 
-    Lane timings exist only as a product of a render pass, so there is nothing
-    honest to put in them before one has run.
+    Measured onsets exist only as a product of a render pass, and presenting a
+    guess as a measurement would be a lie — but refusing to show anything made
+    the editor unreachable until someone spent TTS credits, which is its own
+    kind of dishonesty about what the tool can do. So the lanes are planned by
+    the same planner the renderer uses, from the word-count duration heuristic,
+    and the response says ``timing_source="estimated"`` so no client can mistake
+    one for the other. Nothing here calls a provider or charges the governor.
     """
-    return SceneTimeline(
-        scene_ordinal=scene.ordinal,
-        duration_ms=0,
-        markers=[
-            SceneMarker(scene_ordinal=scene.ordinal, start_ms=0, slugline=scene.slugline)
-        ],
-        dialogue=[],
-        ambience=[],
-        sfx=[],
-        visual=[],
-        settings=settings,
+    return _timeline_from_timing(
+        estimate_scene_timing(scene, settings),
+        scene,
+        shotlist,
+        settings,
+        timing_source="estimated",
     )
 
 
@@ -455,16 +483,19 @@ def get_timeline(
     repo: Repository = Depends(get_repo),
 ) -> SceneTimeline:
     _, scene = _get_scene_or_404(repo, project.id, ordinal)
-    record = repo.get_audio_render(project.id, ordinal)
-    if record is None:
-        raise HTTPException(
-            status_code=404, detail=f"No audio rendered yet for scene {ordinal}"
-        )
     shotlist_record = repo.get_shotlist(project.id, ordinal)
     shotlist = shotlist_record.shotlist if shotlist_record is not None else None
-    return _build_timeline(
-        record, scene, shotlist, repo.get_render_settings(project.id, ordinal)
-    )
+    settings = repo.get_render_settings(project.id, ordinal)
+
+    # A missing render is not a missing scene. Estimating keeps the timeline
+    # editor usable on a deployment that has never rendered audio — the case a
+    # reviewer hits first — while timing_source keeps the answer honest. A
+    # missing script or unknown ordinal still 404s above: those are real
+    # absences.
+    record = repo.get_audio_render(project.id, ordinal)
+    if record is None:
+        return _estimated_timeline(scene, shotlist, settings)
+    return _build_timeline(record, scene, shotlist, settings)
 
 
 @router.post("/timeline/edits", response_model=SceneTimeline)
@@ -524,5 +555,5 @@ def post_timeline_edits(
 
     record = repo.get_audio_render(project.id, ordinal)
     if record is None:
-        return _unrendered_timeline(edited_scene, result.settings)
+        return _estimated_timeline(edited_scene, result.shotlist, result.settings)
     return _build_timeline(record, edited_scene, result.shotlist, result.settings)
