@@ -1,17 +1,23 @@
 // Repository layer. All data access goes through this interface so the mock
 // can be swapped for the FastAPI client without touching UI code.
 //
-// Which implementation `api` points at is decided once, here, from
-// NEXT_PUBLIC_USE_MOCK_API (see the bottom of this file).
+// Which implementation `api` points at is decided once, here — see the
+// "Mock vs live" block at the bottom of this file. The rule in one line:
+// **a production build talks to the real API unless someone deliberately opts
+// out**, and whichever side is answering is stamped onto the UI.
 
 import { HttpApi } from "@/lib/httpApi";
 import type {
   AnimaticJudgment,
   Finding,
   GrammarProfile,
+  JudgeEngine,
   RankingResult,
   ShotSpec,
+  ShotVideo,
   TimelineData,
+  VideoRenderRequest,
+  VideoRenderResult,
   Voice,
   VoiceFitRequest,
   VoiceFitResult,
@@ -58,9 +64,20 @@ export interface CastingData {
   casting: Record<string, Voice>;
   /** Pre-built casting variants so the leaderboard is demoable on arrival. */
   candidates: { label: string; casting: Record<string, Voice> }[];
+  /**
+   * True when `voices` is a local stub rather than a provider catalog. The API
+   * publishes no voice-catalog endpoint yet (see the GAP in `httpApi.ts`), so
+   * even against a live backend the pool is fixture data. The judge scores are
+   * real; the *names being scored* are not, and the UI has to say so.
+   */
+  voicesAreStub: boolean;
 }
 
 export interface StoryEngineApi {
+  /** Which judge produced this implementation's scores. Never blended: one
+   * engine answers a request end to end, and the UI stamps every score. */
+  readonly judgeEngine: JudgeEngine;
+
   getScene(sceneId: string): Promise<SceneData>;
   /** Persist shots and return the server's authoritative findings. */
   validateScene(sceneId: string, shots: ShotSpec[]): Promise<Finding[]>;
@@ -89,12 +106,31 @@ export interface StoryEngineApi {
 
   // --- Timeline editor --------------------------------------------------- //
   /** Load the scrubbable timeline (audio + visual lanes) for a project.
-   * Real: GET /api/v1/projects/{projectId}/render/audio for the rendered WAV,
-   * plus the scene's shot list for the visual track. */
+   * Real: GET /api/v1/projects/{projectId}/scenes/{ordinal}/timeline. */
   getTimeline(projectId: string): Promise<TimelineData>;
+
+  /** Fetch the stored video clip for one shot, or `null` when none exists.
+   * `null` is the ordinary case — a Veo render costs credits, so most shots
+   * have never been rendered. Only a genuine failure throws.
+   * Real: GET /api/v1/projects/{id}/render/video/{scene}/{shot} */
+  getShotVideo(
+    projectId: string,
+    sceneOrdinal: number,
+    shotOrdinal: number,
+  ): Promise<ShotVideo | null>;
+
+  /** Render one shot to video. Spends provider credits and can be refused by
+   * the rights gate (403) or the cost governor (402).
+   * Real: POST /api/v1/projects/{id}/render/video */
+  renderShotVideo(
+    projectId: string,
+    req: VideoRenderRequest,
+  ): Promise<VideoRenderResult>;
 }
 
 class MockApi implements StoryEngineApi {
+  readonly judgeEngine: JudgeEngine = "local-heuristic";
+
   async getScene(sceneId: string): Promise<SceneData> {
     return {
       id: sceneId || MOCK_SCENE_ID,
@@ -133,6 +169,7 @@ class MockApi implements StoryEngineApi {
         label: c.label,
         casting: castingFromIds(c.ids),
       })),
+      voicesAreStub: true,
     };
   }
 
@@ -143,6 +180,13 @@ class MockApi implements StoryEngineApi {
     // Real: POST {casting, available_voices} to .../judge/voices and return the
     // server's VoiceFitResult. The mock runs the same deterministic heuristic
     // client-side (see lib/judge.ts) so scores respond to every reassignment.
+    //
+    // The backend declares `casting: dict[str, Voice] = Field(min_length=1)`,
+    // so an empty casting is a 422 there. Fail the same way here rather than
+    // letting the mock succeed where the real API cannot.
+    if (Object.keys(req.casting).length === 0) {
+      throw new Error("Cast at least one character before judging.");
+    }
     return judgeCasting(
       MOCK_CHARACTER_SIGNALS,
       req.casting,
@@ -157,6 +201,9 @@ class MockApi implements StoryEngineApi {
     // Real: POST {candidates, available_voices} to .../judge/rank/voices. The
     // mock judges each candidate and assembles the same best-first leaderboard
     // the backend does: sort by overall score desc, ties broken by label asc.
+    if (req.candidates.length === 0) {
+      throw new Error("Snapshot at least one take before ranking.");
+    }
     const pool = req.available_voices ?? MOCK_VOICE_POOL;
     const scored = req.candidates.map((c) => ({
       label: c.label,
@@ -183,12 +230,13 @@ class MockApi implements StoryEngineApi {
 
   // --- Timeline editor --------------------------------------------------- //
   async getTimeline(projectId: string): Promise<TimelineData> {
-    // Real: GET /api/v1/projects/{projectId}/render/audio for the rendered WAV,
-    // plus the scene's shot list for the visual track. Here it's served from a
-    // fixture, deep-cloned so the timeline store's edits never touch MOCK_TIMELINE.
+    // Real: GET .../scenes/{ordinal}/timeline joined with the scene's shot list.
+    // Here it's served from a fixture, deep-cloned so the timeline store's edits
+    // never touch MOCK_TIMELINE.
     const t = MOCK_TIMELINE;
     return {
       projectId: projectId || t.projectId,
+      sceneOrdinal: t.sceneOrdinal,
       sceneTitle: t.sceneTitle,
       durationMs: t.durationMs,
       scenes: t.scenes.map((s) => ({ ...s })),
@@ -200,15 +248,98 @@ class MockApi implements StoryEngineApi {
       },
     };
   }
+
+  /** No fixture ships a video file, and inventing a playable clip would be the
+   * exact fabrication this app is trying to avoid. So the mock reports the
+   * truth: nothing is rendered. That is also the state the editor is designed
+   * around, so the empty case is what local development exercises. */
+  async getShotVideo(): Promise<ShotVideo | null> {
+    return null;
+  }
+
+  /** Rendering needs a provider, and the mock has none. Refuse clearly instead
+   * of pretending a clip exists — this drives the editor's real error state. */
+  async renderShotVideo(
+    _projectId: string,
+    req: VideoRenderRequest,
+  ): Promise<VideoRenderResult> {
+    await new Promise((r) => setTimeout(r, 900));
+    throw new Error(
+      `Mock mode has no video provider, so shot ${req.shot_ordinal} cannot be ` +
+        "rendered. Point the app at a live backend (NEXT_PUBLIC_USE_MOCK_API=false) " +
+        "to render with Veo.",
+    );
+  }
 }
 
-/**
- * Mock unless NEXT_PUBLIC_USE_MOCK_API is explicitly "false". Defaulting to the
- * mock keeps the demo runnable with no backend, no database, and no login —
- * flipping the flag is the only step needed to point the same UI at uvicorn.
- * Read as a full literal so Next can inline it at build time.
- */
-export const USE_MOCK_API =
-  (process.env.NEXT_PUBLIC_USE_MOCK_API ?? "true").toLowerCase() !== "false";
+// --------------------------------------------------------------------------- //
+// Mock vs live
+//
+// The old default was "mock unless told otherwise", which meant a deployment
+// that forgot one env var served fabricated numbers that looked authoritative.
+// The default is now decided by the build itself:
+//
+//   NEXT_PUBLIC_USE_MOCK_API=true  -> mock   (explicit opt-in, any environment)
+//   NEXT_PUBLIC_USE_MOCK_API=false -> live   (explicit opt-out, any environment)
+//   unset, `next dev`              -> mock   (no backend needed to hack on UI)
+//   unset, `next build`/`start`    -> LIVE   (a shipped build never invents data)
+//
+// Forgetting the variable can no longer ship fake data; only writing it can,
+// and then `API_MODE_NOTICE` says so loudly on screen. Both reads below are
+// full literals so Next inlines them at build time (dynamic lookups are not
+// inlined — see next/dist/docs/01-app/02-guides/environment-variables.md).
+// --------------------------------------------------------------------------- //
 
-export const api: StoryEngineApi = USE_MOCK_API ? new MockApi() : new HttpApi();
+export type ApiMode = "mock" | "live";
+
+const TRUTHY = new Set(["true", "1", "yes", "on"]);
+const FALSY = new Set(["false", "0", "no", "off"]);
+
+const RAW_MOCK_FLAG = (process.env.NEXT_PUBLIC_USE_MOCK_API ?? "").trim().toLowerCase();
+const IS_PRODUCTION_BUILD = process.env.NODE_ENV === "production";
+
+function resolveMode(): { mode: ApiMode; reason: string } {
+  if (TRUTHY.has(RAW_MOCK_FLAG)) {
+    return {
+      mode: "mock",
+      reason: "NEXT_PUBLIC_USE_MOCK_API is set to a true value.",
+    };
+  }
+  if (FALSY.has(RAW_MOCK_FLAG)) {
+    return {
+      mode: "live",
+      reason: "NEXT_PUBLIC_USE_MOCK_API is set to a false value.",
+    };
+  }
+  if (RAW_MOCK_FLAG !== "") {
+    // A typo ("mock", "yes please", …) must not silently mean "mock".
+    return {
+      mode: IS_PRODUCTION_BUILD ? "live" : "mock",
+      reason: `NEXT_PUBLIC_USE_MOCK_API="${RAW_MOCK_FLAG}" is not a boolean; falling back to the ${
+        IS_PRODUCTION_BUILD ? "production" : "development"
+      } default.`,
+    };
+  }
+  return IS_PRODUCTION_BUILD
+    ? { mode: "live", reason: "Production build with no override: live API." }
+    : { mode: "mock", reason: "Development build with no override: mock data." };
+}
+
+const RESOLVED = resolveMode();
+
+/** Which implementation `api` is. Render it — do not let a viewer guess. */
+export const API_MODE: ApiMode = RESOLVED.mode;
+
+/** Why that mode was chosen; shown in the mode badge's tooltip. */
+export const API_MODE_REASON: string = RESOLVED.reason;
+
+/** Set when the running build is serving fabricated data — a deployed build
+ * that was deliberately switched to the mock. The UI shows this at full volume. */
+export const API_MODE_IS_UNSAFE_DEPLOY: boolean =
+  API_MODE === "mock" && IS_PRODUCTION_BUILD;
+
+/** Retained for callers that only need the boolean. */
+export const USE_MOCK_API: boolean = API_MODE === "mock";
+
+export const api: StoryEngineApi =
+  API_MODE === "mock" ? new MockApi() : new HttpApi();

@@ -5,6 +5,7 @@ import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import { api } from "@/lib/api";
 import { useCastingStore } from "@/lib/castingStore";
 import { ScoreBar, pctOf } from "@/components/casting/ScoreMeter";
+import { EngineChip, FailurePanel } from "@/components/casting/JudgeStatus";
 import { FOCUS_RING } from "@/components/casting/theme";
 
 function medal(rank: number): { style: CSSProperties; label: string | null } {
@@ -40,9 +41,11 @@ export default function CandidateLeaderboard() {
   const reduce = useReducedMotion();
   const projectId = useCastingStore((s) => s.projectId);
   const voices = useCastingStore((s) => s.voices);
+  const casting = useCastingStore((s) => s.casting);
   const candidates = useCastingStore((s) => s.candidates);
   const ranking = useCastingStore((s) => s.ranking);
   const rankingStale = useCastingStore((s) => s.rankingStale);
+  const rankingEngine = useCastingStore((s) => s.rankingEngine);
   const addCandidate = useCastingStore((s) => s.addCandidate);
   const removeCandidate = useCastingStore((s) => s.removeCandidate);
   const loadCandidate = useCastingStore((s) => s.loadCandidate);
@@ -50,20 +53,30 @@ export default function CandidateLeaderboard() {
 
   const [label, setLabel] = useState("");
   const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<unknown>(null);
+
+  // A snapshot of an empty casting would be rejected by the judge, so the
+  // capture itself is gated on having cast something.
+  const canSnapshot = Object.keys(casting).length > 0;
 
   const add = () => {
+    if (!canSnapshot) return;
     addCandidate(label || `Take ${candidates.length + 1}`);
     setLabel("");
   };
 
   const rank = async () => {
     setBusy(true);
+    setError(null);
     try {
       const result = await api.rankVoices(projectId, {
         candidates: candidates.map((c) => ({ label: c.label, casting: c.casting })),
-        available_voices: voices,
+        available_voices: voices.length ? voices : null,
       });
-      setRanking(result);
+      // Stamped with the engine that ranked, exactly like the fit panel.
+      setRanking(result, api.judgeEngine);
+    } catch (err) {
+      setError(err);
     } finally {
       setBusy(false);
     }
@@ -82,6 +95,7 @@ export default function CandidateLeaderboard() {
               out of date
             </span>
           )}
+          {ranking && rankingEngine && <EngineChip engine={rankingEngine} />}
         </div>
         <motion.button
           whileTap={reduce || candidates.length < 2 ? undefined : { scale: 0.97 }}
@@ -115,7 +129,13 @@ export default function CandidateLeaderboard() {
             />
             <button
               onClick={add}
-              className={`shrink-0 rounded-lg border border-[var(--hairline-strong)] px-3 py-1.5 text-[11px] font-medium text-zinc-300 transition-colors hover:border-zinc-500 hover:text-zinc-100 ${FOCUS_RING}`}
+              disabled={!canSnapshot}
+              title={
+                canSnapshot
+                  ? "Snapshot the current casting"
+                  : "Cast at least one character before snapshotting a take"
+              }
+              className={`shrink-0 rounded-lg border border-[var(--hairline-strong)] px-3 py-1.5 text-[11px] font-medium text-zinc-300 transition-colors hover:border-zinc-500 hover:text-zinc-100 disabled:cursor-not-allowed disabled:opacity-40 ${FOCUS_RING}`}
             >
               + Add casting
             </button>
@@ -162,19 +182,32 @@ export default function CandidateLeaderboard() {
             )}
           </div>
 
+          {error !== null && !busy && (
+            <div className="mb-2">
+              <FailurePanel
+                error={error}
+                onRetry={candidates.length >= 2 ? rank : undefined}
+                retryLabel="Rank again"
+                compact
+              />
+            </div>
+          )}
+
           {busy && (
             <div className="space-y-2">
-              {[0, 1, 2].map((i) => (
-                <div key={i} className="cast-card flex items-center gap-3 p-3">
+              {candidates.slice(0, 4).map((c) => (
+                <div key={c.label} className="cast-card flex items-center gap-3 p-3">
                   <div className="cast-shimmer h-6 w-6 shrink-0 rounded-full" />
-                  <div className="cast-shimmer h-3 w-32 rounded" />
+                  <span className="truncate font-mono text-[12px] text-zinc-500">
+                    {c.label}
+                  </span>
                   <div className="cast-shimmer ml-auto h-3 w-8 rounded" />
                 </div>
               ))}
             </div>
           )}
 
-          {!busy && (!ranking || ranking.entries.length === 0) && (
+          {!busy && error === null && (!ranking || ranking.entries.length === 0) && (
             <div className="flex flex-col items-center justify-center gap-2 rounded-xl border border-dashed border-[var(--hairline-strong)] px-6 py-12 text-center">
               <p className="text-sm font-medium text-zinc-300">No ranking yet</p>
               <p className="max-w-sm text-xs leading-relaxed text-zinc-500">

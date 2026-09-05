@@ -5,9 +5,35 @@
 // happen on the clips themselves.
 
 import type { ReactNode } from "react";
-import { useTimelineStore } from "@/lib/timelineStore";
+import { useTimelineStore, videoKey } from "@/lib/timelineStore";
 import { emotionStyle } from "@/components/casting/theme";
 import { LANE_META, msToClock } from "@/components/timeline/layout";
+
+/** The shot's render state, in the same words the program monitor uses, so the
+ * two surfaces never disagree about whether a picture exists. */
+const VIDEO_LABEL: Record<string, { text: string; tone: string }> = {
+  unknown: { text: "checking…", tone: "text-zinc-500" },
+  probing: { text: "checking…", tone: "text-zinc-500" },
+  none: { text: "not rendered", tone: "text-zinc-400" },
+  rendering: { text: "rendering…", tone: "text-amber-300" },
+  ready: { text: "render available", tone: "text-emerald-300" },
+  error: { text: "render failed", tone: "text-rose-300" },
+};
+
+function VideoRow({ shotOrdinal }: { shotOrdinal: number }) {
+  const sceneOrdinal = useTimelineStore((s) => s.data?.sceneOrdinal ?? null);
+  const status = useTimelineStore((s) =>
+    sceneOrdinal === null
+      ? "unknown"
+      : (s.videos[videoKey(sceneOrdinal, shotOrdinal)]?.status ?? "unknown"),
+  );
+  const label = VIDEO_LABEL[status] ?? VIDEO_LABEL.unknown;
+  return (
+    <Row label="Video">
+      <span className={label.tone}>{label.text}</span>
+    </Row>
+  );
+}
 
 function Row({ label, children }: { label: string; children: ReactNode }) {
   return (
@@ -63,6 +89,7 @@ export default function Inspector() {
                 {msToClock(c.startMs)} · {(c.durationMs / 1000).toFixed(1)}s
               </span>
             </Row>
+            <VideoRow shotOrdinal={c.shotOrdinal} />
           </>
         );
     } else if (selection.lane === "dialogue") {
@@ -124,7 +151,7 @@ export default function Inspector() {
   }
 
   return (
-    <div className="cast-panel flex min-h-[168px] flex-col p-4">
+    <div className="cast-panel flex h-full min-h-[168px] flex-col p-4">
       <div className="mb-3 flex items-center gap-2">
         <span className="h-1.5 w-1.5 rounded-full bg-sky-400" aria-hidden />
         <h2 className="text-[11px] font-semibold uppercase tracking-[0.16em] text-zinc-300">

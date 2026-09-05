@@ -207,6 +207,31 @@ export interface VoiceRankRequest {
   available_voices?: Voice[] | null;
 }
 
+// --- Judge provenance ------------------------------------------------------ //
+// A score on screen was produced either by the FastAPI judge or by the local
+// TypeScript port of the same heuristic (`lib/judge.ts`). The two CAN drift, so
+// every result carries the engine that produced it and the UI labels it. They
+// are never blended: one engine answers a request, end to end.
+
+export type JudgeEngine = "backend" | "local-heuristic";
+
+/** Human-facing copy for a `JudgeEngine`, rendered next to any score. */
+export const JUDGE_ENGINE_META: Record<
+  JudgeEngine,
+  { label: string; detail: string }
+> = {
+  backend: {
+    label: "backend judge",
+    detail:
+      "Scored by the FastAPI judge (app/judge) over this project's stored story graph.",
+  },
+  "local-heuristic": {
+    label: "local heuristic",
+    detail:
+      "Scored in the browser by lib/judge.ts, a port of the backend heuristic. Indicative only — the server is authoritative.",
+  },
+};
+
 /** Canonical delivery-emotion vocabulary (backend `app.nlp.emotion.EMOTIONS`). */
 export const EMOTIONS = [
   "angry",
@@ -288,6 +313,9 @@ export interface TimelineLanes {
 /** Everything the timeline editor needs to open, in one payload. */
 export interface TimelineData {
   projectId: string;
+  /** Which scene these lanes belong to. The render endpoints address a shot by
+   * (scene_ordinal, shot_ordinal), so the visual lane is useless without it. */
+  sceneOrdinal: number;
   sceneTitle: string;
   durationMs: number;
   scenes: SceneMarker[];
@@ -299,3 +327,65 @@ export interface TimelineSelection {
   lane: TimelineLaneKind;
   id: string;
 }
+
+// --------------------------------------------------------------------------- //
+// Shot video renders (backend/app/api/routers/renders.py).
+//
+//   POST /api/v1/projects/{id}/render/video          -> VideoRenderOut  (201)
+//   GET  /api/v1/projects/{id}/render/video/{s}/{sh} -> video/mp4 bytes, OR a
+//                                                       JSON provider-URL card,
+//                                                       OR 404 when unrendered.
+//
+// A render costs real provider credits, so "nothing rendered yet" is the normal
+// state, not an error — see `ShotVideoStatus`.
+// --------------------------------------------------------------------------- //
+
+/** Body for POST .../render/video. `duration_s` is clamped 1..60 server-side. */
+export interface VideoRenderRequest {
+  scene_ordinal: number;
+  shot_ordinal: number;
+  duration_s: number;
+}
+
+/** Response of POST .../render/video — mirrors backend `VideoRenderOut`. */
+export interface VideoRenderResult {
+  scene_ordinal: number;
+  shot_ordinal: number;
+  duration_ms: number;
+  cost_cents: number;
+  provider: string;
+  model: string;
+  /** Which generation path the renderer took. */
+  source: "image" | "text";
+  output_urls: string[];
+  /** True when GET .../render/video/{s}/{sh} will hand back playable bytes. */
+  has_video: boolean;
+}
+
+/** A stored clip for one shot, normalized for a `<video>` element.
+ *
+ * `src` is null when the render exists but this browser cannot play it directly
+ * — the provider delivered to `gs://` and no bucket read-through is configured.
+ * That is a legitimate, honest state: show the reference, not a broken player. */
+export interface ShotVideo {
+  sceneOrdinal: number;
+  shotOrdinal: number;
+  /** Playable URL for `<video src>`, or null (see above). */
+  src: string | null;
+  /** True when `src` came from `URL.createObjectURL` and must be revoked. */
+  srcIsObjectUrl: boolean;
+  /** Non-playable provider references (`gs://…`), shown verbatim. */
+  providerUrls: string[];
+  durationMs: number | null;
+  provider: string | null;
+  model: string | null;
+}
+
+/** Lifecycle of one shot's video in the editor. `none` is the common case. */
+export type ShotVideoStatus =
+  | "unknown" // not looked up yet
+  | "probing" // GET in flight
+  | "none" // 404 — nothing rendered for this shot
+  | "rendering" // POST in flight
+  | "ready" // a render exists (playable, or a provider reference)
+  | "error"; // the lookup or the render failed — `error` says why

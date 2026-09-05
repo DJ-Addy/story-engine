@@ -1,5 +1,6 @@
 import { create } from "zustand";
 import type {
+  JudgeEngine,
   RankingResult,
   Voice,
   VoiceFitResult,
@@ -17,6 +18,8 @@ interface CastingState {
   title: string;
   characters: CharacterSignal[];
   voices: Voice[];
+  /** True when `voices` is fixture data rather than a provider catalog. */
+  voicesAreStub: boolean;
 
   /** The casting being edited: character name -> assigned voice. */
   casting: Record<string, Voice>;
@@ -24,11 +27,16 @@ interface CastingState {
   /** Last judge result, and whether the casting changed since it was produced. */
   fit: VoiceFitResult | null;
   fitStale: boolean;
+  /** Which judge produced `fit` — stamped when the result lands, so the number
+   * on screen is always attributable even if the client is swapped later. */
+  fitEngine: JudgeEngine | null;
 
   candidates: CandidateSnapshot[];
   ranking: RankingResult<VoiceFitResult> | null;
   /** True when candidates changed since the last ranking (leaderboard is out of date). */
   rankingStale: boolean;
+  /** Which judge produced `ranking`. */
+  rankingEngine: JudgeEngine | null;
 
   load(data: {
     projectId: string;
@@ -37,13 +45,14 @@ interface CastingState {
     voices: Voice[];
     casting: Record<string, Voice>;
     candidates?: CandidateSnapshot[];
+    voicesAreStub?: boolean;
   }): void;
   assignVoice(character: string, voice: Voice): void;
-  setFit(fit: VoiceFitResult): void;
+  setFit(fit: VoiceFitResult, engine: JudgeEngine): void;
   addCandidate(label: string): void;
   removeCandidate(label: string): void;
   loadCandidate(label: string): void;
-  setRanking(ranking: RankingResult<VoiceFitResult>): void;
+  setRanking(ranking: RankingResult<VoiceFitResult>, engine: JudgeEngine): void;
 }
 
 const cloneCasting = (casting: Record<string, Voice>): Record<string, Voice> =>
@@ -54,25 +63,39 @@ export const useCastingStore = create<CastingState>((set, get) => ({
   title: "",
   characters: [],
   voices: [],
+  voicesAreStub: false,
   casting: {},
   fit: null,
   fitStale: false,
+  fitEngine: null,
   candidates: [],
   ranking: null,
   rankingStale: false,
+  rankingEngine: null,
 
-  load({ projectId, title, characters, voices, casting, candidates = [] }) {
+  load({
+    projectId,
+    title,
+    characters,
+    voices,
+    casting,
+    candidates = [],
+    voicesAreStub = false,
+  }) {
     set({
       projectId,
       title,
       characters,
       voices,
+      voicesAreStub,
       casting,
       fit: null,
       fitStale: false,
+      fitEngine: null,
       candidates,
       ranking: null,
       rankingStale: candidates.length >= 2,
+      rankingEngine: null,
     });
   },
 
@@ -85,8 +108,8 @@ export const useCastingStore = create<CastingState>((set, get) => ({
     });
   },
 
-  setFit(fit) {
-    set({ fit, fitStale: false });
+  setFit(fit, engine) {
+    set({ fit, fitStale: false, fitEngine: engine });
   },
 
   addCandidate(label) {
@@ -115,7 +138,7 @@ export const useCastingStore = create<CastingState>((set, get) => ({
     set({ casting: cloneCasting(snapshot.casting), fitStale: fit !== null });
   },
 
-  setRanking(ranking) {
-    set({ ranking, rankingStale: false });
+  setRanking(ranking, engine) {
+    set({ ranking, rankingStale: false, rankingEngine: engine });
   },
 }));

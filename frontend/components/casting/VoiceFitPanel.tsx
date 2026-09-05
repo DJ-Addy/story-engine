@@ -6,6 +6,7 @@ import { api } from "@/lib/api";
 import { useCastingStore } from "@/lib/castingStore";
 import type { CharacterVoiceFit, VoiceFinding } from "@/lib/types";
 import { ScoreDial, scoreTone, pctOf } from "@/components/casting/ScoreMeter";
+import { EngineChip, FailurePanel } from "@/components/casting/JudgeStatus";
 import { emotionStyle, FOCUS_RING, SEVERITY } from "@/components/casting/theme";
 
 const TONE_LABEL = {
@@ -124,22 +125,39 @@ function FitSkeleton() {
 export default function VoiceFitPanel() {
   const reduce = useReducedMotion();
   const projectId = useCastingStore((s) => s.projectId);
+  const characters = useCastingStore((s) => s.characters);
   const casting = useCastingStore((s) => s.casting);
   const voices = useCastingStore((s) => s.voices);
   const fit = useCastingStore((s) => s.fit);
   const fitStale = useCastingStore((s) => s.fitStale);
+  const fitEngine = useCastingStore((s) => s.fitEngine);
   const setFit = useCastingStore((s) => s.setFit);
   const assignVoice = useCastingStore((s) => s.assignVoice);
   const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<unknown>(null);
 
   const runJudge = useCallback(async () => {
+    // The backend declares `casting` with min_length=1; sending an empty map is
+    // a 422, so refuse locally with wording the user can act on.
+    const current = useCastingStore.getState().casting;
+    if (Object.keys(current).length === 0) {
+      setError(new Error("Assign a voice to at least one character first."));
+      return;
+    }
     setBusy(true);
+    setError(null);
     try {
       const result = await api.judgeVoices(projectId, {
-        casting: useCastingStore.getState().casting,
-        available_voices: voices,
+        casting: current,
+        // Only send a pool when there is one; `null` tells the server to fall
+        // back to the casting's own voices rather than rejecting an empty list.
+        available_voices: voices.length ? voices : null,
       });
-      setFit(result);
+      // Stamp the result with whichever judge answered, so the score on screen
+      // is attributable and the two engines are never silently blended.
+      setFit(result, api.judgeEngine);
+    } catch (err) {
+      setError(err);
     } finally {
       setBusy(false);
     }
@@ -156,6 +174,7 @@ export default function VoiceFitPanel() {
   );
 
   const castCount = Object.keys(casting).length;
+  const uncastCount = characters.filter((c) => !casting[c.name]).length;
 
   return (
     <div className="cast-panel flex flex-col">
@@ -176,11 +195,17 @@ export default function VoiceFitPanel() {
               {fitStale ? "casting changed" : `overall ${pctOf(fit.overall_score)}`}
             </span>
           )}
+          {fit && fitEngine && <EngineChip engine={fitEngine} />}
         </div>
         <motion.button
           whileTap={reduce ? undefined : { scale: 0.97 }}
           onClick={runJudge}
           disabled={busy || castCount === 0}
+          title={
+            castCount === 0
+              ? "Assign a voice to at least one character first"
+              : undefined
+          }
           className={`rounded-lg bg-amber-400 px-3.5 py-1.5 text-xs font-semibold text-zinc-950 shadow-[0_0_24px_-10px_rgba(251,191,36,0.7)] transition-colors hover:bg-amber-300 disabled:cursor-not-allowed disabled:opacity-40 disabled:shadow-none ${FOCUS_RING}`}
         >
           {busy ? "Judging…" : fit ? "Re-judge casting" : "Judge this casting"}
@@ -207,7 +232,26 @@ export default function VoiceFitPanel() {
         </AnimatePresence>
       </div>
 
-      <div className="p-3">
+      <div className="space-y-2.5 p-3">
+        {error !== null && (
+          <FailurePanel
+            error={error}
+            onRetry={castCount > 0 ? runJudge : undefined}
+            retryLabel="Judge again"
+            compact
+          />
+        )}
+
+        {/* Partial cast: the judge still runs, and reports who was left out. */}
+        {!busy && castCount > 0 && uncastCount > 0 && (
+          <p className="rounded-lg border border-[var(--hairline)] bg-white/[0.02] px-3 py-2 text-[11px] leading-relaxed text-zinc-500">
+            {uncastCount} of {characters.length} role
+            {characters.length === 1 ? "" : "s"} {uncastCount === 1 ? "is" : "are"}{" "}
+            still uncast. Judging now scores the {castCount} cast role
+            {castCount === 1 ? "" : "s"} and lists the rest as uncast.
+          </p>
+        )}
+
         {!fit && !busy && (
           <div className="flex flex-col items-center justify-center gap-3 px-6 py-16 text-center">
             <span
@@ -227,11 +271,13 @@ export default function VoiceFitPanel() {
                 <circle cx="12" cy="12" r="4" />
               </svg>
             </span>
-            <p className="text-sm font-medium text-zinc-300">No judgment yet</p>
+            <p className="text-sm font-medium text-zinc-300">
+              {castCount === 0 ? "Nothing cast yet" : "No judgment yet"}
+            </p>
             <p className="max-w-xs text-xs leading-relaxed text-zinc-500">
-              Assign a voice to each character, then judge the casting. The judge
-              scores every character&apos;s fit and suggests better voices from
-              the pool.
+              {castCount === 0
+                ? "Pick a voice for at least one character in the roster — the judge needs a casting to score."
+                : "Judge the casting. The judge scores every character's fit and suggests better voices from the pool."}
             </p>
           </div>
         )}

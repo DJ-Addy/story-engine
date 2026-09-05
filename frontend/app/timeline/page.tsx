@@ -1,42 +1,68 @@
 "use client";
 
-import { useEffect } from "react";
+import { useCallback, useEffect, useState } from "react";
 import Link from "next/link";
 import { motion, useReducedMotion } from "motion/react";
 import { api } from "@/lib/api";
 import { useTimelineStore } from "@/lib/timelineStore";
 import { FOCUS_RING } from "@/components/casting/theme";
+import { FailurePanel } from "@/components/casting/JudgeStatus";
+import ApiModeBadge from "@/components/ApiModeBadge";
 import TransportBar from "@/components/timeline/TransportBar";
 import TimelineGrid from "@/components/timeline/TimelineGrid";
 import Inspector from "@/components/timeline/Inspector";
+import VideoMonitor from "@/components/timeline/VideoMonitor";
 import AiAssistStrip from "@/components/timeline/AiAssistStrip";
 import { useTimelineAudio } from "@/components/timeline/useTimelineAudio";
 import { useTransportClock } from "@/components/timeline/useTransportClock";
 import { msToClock } from "@/components/timeline/layout";
+
+type LoadState = "loading" | "ready" | "failed";
 
 export default function TimelinePage() {
   const reduce = useReducedMotion();
   const load = useTimelineStore((s) => s.load);
   const data = useTimelineStore((s) => s.data);
 
+  const [state, setState] = useState<LoadState>("loading");
+  const [error, setError] = useState<unknown>(null);
+  const [attempt, setAttempt] = useState(0);
+
   // Placeholder audio engine + the virtual transport clock. See
   // useTimelineAudio for the SEAM to the real rendered WAV.
   const { engineRef, activate } = useTimelineAudio();
   useTransportClock(engineRef);
 
-  // Load the (mock) timeline through the api seam, mirroring /casting.
+  // Load the timeline through the api seam, mirroring /casting.
   useEffect(() => {
     let cancelled = false;
-    // Real: GET /api/v1/projects/{id}/render/audio (rendered WAV) + the shot
-    // list for the visual track; here it's served from fixtures.
-    api.getTimeline("demo").then((d) => {
-      if (cancelled) return;
-      load(d);
-    });
+    api
+      .getTimeline("demo")
+      .then((d) => {
+        if (cancelled) return;
+        load(d);
+        setState("ready");
+      })
+      .catch((err: unknown) => {
+        // Against a live backend the timeline 404s ("No audio rendered yet")
+        // until a scene has been rendered. That is information, not a spinner.
+        if (cancelled) return;
+        setError(err);
+        setState("failed");
+      });
+
     return () => {
       cancelled = true;
     };
-  }, [load]);
+  }, [load, attempt]);
+
+  // The transition back to "loading" happens here, in the event handler, not
+  // inside the effect — a synchronous setState in an effect body cascades.
+  const retry = useCallback(() => {
+    setState("loading");
+    setError(null);
+    setAttempt((n) => n + 1);
+  }, []);
 
   // Global transport keyboard: space = play/pause, arrows nudge. Ignored while
   // typing in a form control.
@@ -107,6 +133,7 @@ export default function TimelinePage() {
             </span>
           )}
           <div className="ml-auto flex items-center gap-3">
+            <ApiModeBadge />
             <Link
               href="/casting"
               className={`rounded-sm text-xs text-zinc-400 transition-colors hover:text-zinc-100 ${FOCUS_RING}`}
@@ -131,12 +158,16 @@ export default function TimelinePage() {
               Scrubbable timeline
             </p>
             <h2 className="mt-2 truncate text-2xl font-semibold tracking-tight text-zinc-50 md:text-3xl">
-              {data ? data.sceneTitle : "Loading timeline…"}
+              {data
+                ? data.sceneTitle
+                : state === "failed"
+                  ? "Timeline unavailable"
+                  : "Loading timeline…"}
             </h2>
             <p className="mt-1 max-w-xl text-xs leading-relaxed text-zinc-500">
               The audiobook and animatic on one axis — play, scrub, and inspect.
-              Runs on mock data with a procedural placeholder mix (muted by
-              default); the rendered WAV wires in later.
+              The program monitor shows a shot&apos;s render when one exists; the
+              editor is fully usable when none does.
             </p>
           </div>
           <dl className="flex shrink-0 items-center gap-5">
@@ -159,21 +190,37 @@ export default function TimelinePage() {
           </dl>
         </motion.div>
 
-        <motion.div {...fade(0.06)}>
-          <TransportBar onActivateAudio={activate} />
-        </motion.div>
+        {state === "failed" ? (
+          <motion.div {...fade(0.06)}>
+            <FailurePanel error={error} onRetry={retry} retryLabel="Reload timeline" />
+          </motion.div>
+        ) : (
+          <>
+            <motion.div {...fade(0.06)}>
+              <TransportBar onActivateAudio={activate} />
+            </motion.div>
 
-        <motion.div {...fade(0.12)}>
-          <AiAssistStrip />
-        </motion.div>
+            {/* Viewer + inspector on top, timeline underneath — the shape of an
+                edit bay. The monitor keeps its 16:9 box in every render state,
+                so nothing below it moves when a clip appears or does not. */}
+            <motion.div {...fade(0.12)} className="grid gap-4 lg:grid-cols-12">
+              <div className="lg:col-span-7 xl:col-span-8">
+                <VideoMonitor />
+              </div>
+              <div className="lg:col-span-5 xl:col-span-4">
+                <Inspector />
+              </div>
+            </motion.div>
 
-        <motion.div {...fade(0.18)}>
-          <TimelineGrid />
-        </motion.div>
+            <motion.div {...fade(0.18)}>
+              <AiAssistStrip />
+            </motion.div>
 
-        <motion.div {...fade(0.24)}>
-          <Inspector />
-        </motion.div>
+            <motion.div {...fade(0.24)}>
+              <TimelineGrid />
+            </motion.div>
+          </>
+        )}
 
         <p className="text-center font-mono text-[10px] text-zinc-700">
           space play/pause · ←/→ nudge (shift = ×5) · drag the ruler or playhead

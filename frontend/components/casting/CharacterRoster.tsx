@@ -16,15 +16,17 @@ function VoicePicker({ character }: { character: string }) {
   return (
     <div className="relative">
       <select
-        className={`w-full appearance-none rounded-lg border border-[var(--hairline-strong)] bg-[var(--surface-3)] px-3 py-2 pr-8 font-mono text-[11px] text-zinc-100 outline-none transition-colors hover:border-zinc-500 focus:border-sky-500 ${FOCUS_RING}`}
+        className={`w-full appearance-none rounded-lg border border-[var(--hairline-strong)] bg-[var(--surface-3)] px-3 py-2 pr-8 font-mono text-[11px] text-zinc-100 outline-none transition-colors hover:border-zinc-500 focus:border-sky-500 disabled:cursor-not-allowed disabled:opacity-50 ${FOCUS_RING}`}
         value={assigned?.id ?? ""}
+        disabled={voices.length === 0}
         onChange={(e) => {
           const voice = voices.find((v) => v.id === e.target.value);
           if (voice) assignVoice(character, voice);
         }}
         aria-label={`Voice for ${character}`}
       >
-        {!assigned && <option value="">— pick a voice —</option>}
+        {voices.length === 0 && <option value="">no voices available</option>}
+        {voices.length > 0 && !assigned && <option value="">— pick a voice —</option>}
         {voices.map((v) => (
           <option key={v.id} value={v.id}>
             {v.name} — {v.tags.filter((t) => t !== "american").join(", ")}
@@ -147,8 +149,25 @@ function CharacterCard({
   );
 }
 
-export default function CharacterRoster() {
+function RosterSkeleton() {
+  return (
+    <div className="cast-card p-3.5">
+      <div className="flex items-start gap-3">
+        <div className="cast-shimmer h-9 w-9 shrink-0 rounded-full" />
+        <div className="flex-1 space-y-2.5">
+          <div className="cast-shimmer h-3 w-24 rounded" />
+          <div className="cast-shimmer h-2.5 w-36 rounded" />
+        </div>
+      </div>
+      <div className="cast-shimmer mt-4 h-8 w-full rounded-lg" />
+    </div>
+  );
+}
+
+export default function CharacterRoster({ loading = false }: { loading?: boolean }) {
   const characters = useCastingStore((s) => s.characters);
+  const voices = useCastingStore((s) => s.voices);
+  const voicesAreStub = useCastingStore((s) => s.voicesAreStub);
 
   const totalDialogue = useMemo(
     () => characters.reduce((sum, c) => sum + c.dialogue_lines, 0),
@@ -165,18 +184,45 @@ export default function CharacterRoster() {
           </h2>
         </div>
         <span className="font-mono text-[10px] text-zinc-500">
-          {characters.length} roles · assign a voice
+          {loading ? "loading…" : `${characters.length} roles · assign a voice`}
         </span>
       </div>
+
+      {/* The API publishes no voice-catalog endpoint yet, so even the live path
+          picks from fixtures. Say so here, where voices are chosen. */}
+      {!loading && voicesAreStub && voices.length > 0 && (
+        <p className="border-b border-[var(--hairline)] bg-white/[0.02] px-4 py-2 text-[10px] leading-relaxed text-zinc-500">
+          <span className="font-mono uppercase tracking-wider text-amber-400/80">
+            stub catalog
+          </span>{" "}
+          — the API exposes no voice list yet, so these {voices.length} voices are
+          local fixtures shaped like the TTS adapter&apos;s. Fit scores are real;
+          the voice names are not.
+        </p>
+      )}
+
       <div className="space-y-2.5 p-3">
-        {characters.map((c, i) => (
-          <CharacterCard
-            key={c.name}
-            character={c}
-            index={i}
-            speaksShare={totalDialogue ? c.dialogue_lines / totalDialogue : 0}
-          />
-        ))}
+        {loading && [0, 1, 2].map((i) => <RosterSkeleton key={i} />)}
+
+        {!loading && characters.length === 0 && (
+          <div className="flex flex-col items-center justify-center gap-2 px-6 py-14 text-center">
+            <p className="text-sm font-medium text-zinc-300">No speaking roles</p>
+            <p className="max-w-xs text-xs leading-relaxed text-zinc-500">
+              This project&apos;s story graph has no attributed dialogue, so there
+              is nothing to cast. Ingest a script or attribute some lines first.
+            </p>
+          </div>
+        )}
+
+        {!loading &&
+          characters.map((c, i) => (
+            <CharacterCard
+              key={c.name}
+              character={c}
+              index={i}
+              speaksShare={totalDialogue ? c.dialogue_lines / totalDialogue : 0}
+            />
+          ))}
       </div>
     </div>
   );

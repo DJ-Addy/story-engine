@@ -24,10 +24,11 @@ export default function AiAssistStrip() {
           AI assist
         </h2>
         <span className="rounded-full border border-[var(--hairline)] bg-white/[0.03] px-2 py-0.5 font-mono text-[9px] uppercase tracking-wide text-zinc-500">
-          stub · mock edits
+          stub · local only
         </span>
         <span className="ml-auto hidden text-[11px] text-zinc-600 sm:inline">
-          Editing is meant to be driven by prompts — these apply to the mock data.
+          Editing is meant to be driven by prompts — these reshape the loaded
+          timeline in the browser and are never saved.
         </span>
       </div>
       <div className="flex flex-wrap gap-2">

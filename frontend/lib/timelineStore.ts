@@ -1,5 +1,10 @@
 import { create } from "zustand";
-import type { TimelineData, TimelineSelection } from "@/lib/types";
+import type {
+  ShotVideo,
+  ShotVideoStatus,
+  TimelineData,
+  TimelineSelection,
+} from "@/lib/types";
 
 // Zoom is expressed as pixels-per-second of timeline; the lanes and ruler read
 // it to lay out clips on a shared horizontal time axis.
@@ -34,6 +39,46 @@ export const AI_EDITS = [
 
 export type AiEditId = (typeof AI_EDITS)[number]["id"];
 
+// --------------------------------------------------------------------------- //
+// Shot video state
+//
+// One entry per (scene, shot). The editor never blocks on it: a shot with no
+// entry, or an entry in any state at all, still scrubs, plays, and inspects.
+// The video is a *view* of the timeline, never its clock.
+// --------------------------------------------------------------------------- //
+
+export interface ShotVideoState {
+  status: ShotVideoStatus;
+  video: ShotVideo | null;
+  /** Server wording when `status === "error"`, else null. */
+  error: string | null;
+  /** performance.now() when a render started, for the elapsed readout. */
+  startedAt: number | null;
+}
+
+/** Stable key for the `videos` map. */
+export const videoKey = (sceneOrdinal: number, shotOrdinal: number): string =>
+  `${sceneOrdinal}/${shotOrdinal}`;
+
+const IDLE_VIDEO: ShotVideoState = {
+  status: "unknown",
+  video: null,
+  error: null,
+  startedAt: null,
+};
+
+/** Free a blob URL created by `getShotVideo`. Safe to call on any state. */
+function revokeShotVideo(state: ShotVideoState | undefined): void {
+  const v = state?.video;
+  if (v?.srcIsObjectUrl && v.src) {
+    try {
+      URL.revokeObjectURL(v.src);
+    } catch {
+      // Nothing to do — the URL was already released or never existed.
+    }
+  }
+}
+
 interface TimelineState {
   data: TimelineData | null;
   durationMs: number;
@@ -46,6 +91,9 @@ interface TimelineState {
   /** Placeholder audio is muted by default so the page is silent-safe. */
   muted: boolean;
   appliedEdits: string[];
+
+  /** Per-shot video lifecycle, keyed by `videoKey(scene, shot)`. */
+  videos: Record<string, ShotVideoState>;
 
   load(data: TimelineData): void;
   play(): void;
@@ -63,6 +111,17 @@ interface TimelineState {
   setMuted(muted: boolean): void;
   toggleMuted(): void;
   applyAiEdit(editId: string): void;
+
+  /** Read one shot's video state; never undefined. */
+  videoState(sceneOrdinal: number, shotOrdinal: number): ShotVideoState;
+  /** Replace one shot's video state, releasing any blob URL it displaces. */
+  setVideoState(
+    sceneOrdinal: number,
+    shotOrdinal: number,
+    next: Partial<ShotVideoState> & { status: ShotVideoStatus },
+  ): void;
+  /** Release every blob URL held by the map (unmount / reload). */
+  clearVideos(): void;
 }
 
 /** Deep clone so store edits never mutate the loaded/fixture data in place. */
@@ -111,8 +170,11 @@ export const useTimelineStore = create<TimelineState>((set, get) => ({
   selection: null,
   muted: true,
   appliedEdits: [],
+  videos: {},
 
   load(data) {
+    // A reload invalidates every cached clip; release the blob URLs first.
+    for (const state of Object.values(get().videos)) revokeShotVideo(state);
     set({
       data: cloneTimeline(data),
       durationMs: data.durationMs,
@@ -121,6 +183,7 @@ export const useTimelineStore = create<TimelineState>((set, get) => ({
       pxPerSecond: ZOOM_DEFAULT,
       selection: null,
       appliedEdits: [],
+      videos: {},
       // `muted` is intentionally preserved across loads (default true).
     });
   },
@@ -250,5 +313,34 @@ export const useTimelineStore = create<TimelineState>((set, get) => ({
       currentMs: clamp(state.currentMs, 0, durationMs),
       appliedEdits: [...state.appliedEdits, editId],
     });
+  },
+
+  videoState(sceneOrdinal, shotOrdinal) {
+    return get().videos[videoKey(sceneOrdinal, shotOrdinal)] ?? IDLE_VIDEO;
+  },
+
+  setVideoState(sceneOrdinal, shotOrdinal, next) {
+    const key = videoKey(sceneOrdinal, shotOrdinal);
+    const { videos } = get();
+    const prev = videos[key];
+    // Releasing the displaced blob URL here is the only place it can be done
+    // reliably — the component that requested it may already be unmounted.
+    if (prev && next.video !== prev.video) revokeShotVideo(prev);
+    set({
+      videos: {
+        ...videos,
+        [key]: {
+          status: next.status,
+          video: next.video ?? null,
+          error: next.error ?? null,
+          startedAt: next.startedAt ?? null,
+        },
+      },
+    });
+  },
+
+  clearVideos() {
+    for (const state of Object.values(get().videos)) revokeShotVideo(state);
+    set({ videos: {} });
   },
 }));

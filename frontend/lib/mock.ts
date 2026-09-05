@@ -430,6 +430,10 @@ function buildDialogue(specs: DialogueSpec[]): DialogueClip[] {
 
 export const MOCK_TIMELINE: TimelineData = {
   projectId: MOCK_PROJECT_ID,
+  // `normalize.py` numbers scenes 1-based (ordinal 0 is the pre-slugline
+  // preamble), so the demo scene is 1 — the same scene `parseSceneRef` resolves
+  // a bare project id to in httpApi.ts.
+  sceneOrdinal: 1,
   sceneTitle: MOCK_SCENE_TITLE,
   durationMs: 60000,
   scenes: [

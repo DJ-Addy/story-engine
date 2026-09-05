@@ -6,7 +6,9 @@ import { api } from "@/lib/api";
 import { useCastingStore } from "@/lib/castingStore";
 import type { AnimaticFinding, AnimaticJudgment } from "@/lib/types";
 import { ScoreBar, ScoreDial, pctOf } from "@/components/casting/ScoreMeter";
+import { EngineChip, FailurePanel } from "@/components/casting/JudgeStatus";
 import { FOCUS_RING, SEVERITY } from "@/components/casting/theme";
+import type { JudgeEngine } from "@/lib/types";
 
 function Axis({ label, score }: { label: string; score: number }) {
   return (
@@ -49,18 +51,33 @@ export default function AnimaticJudgePanel() {
   const projectId = useCastingStore((s) => s.projectId);
   const [open, setOpen] = useState(false);
   const [judgment, setJudgment] = useState<AnimaticJudgment | null>(null);
+  const [engine, setEngine] = useState<JudgeEngine | null>(null);
   const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<unknown>(null);
 
-  const openPanel = useCallback(async () => {
-    setOpen(true);
-    if (judgment) return;
+  const run = useCallback(async () => {
     setBusy(true);
+    setError(null);
     try {
-      setJudgment(await api.judgeAnimatic(projectId));
+      const result = await api.judgeAnimatic(projectId);
+      setJudgment(result);
+      setEngine(api.judgeEngine);
+    } catch (err) {
+      // The common failure is a 404 — "No shot lists to judge; author a shot
+      // list first" — which reads as an empty state, not a fault.
+      setJudgment(null);
+      setEngine(null);
+      setError(err);
     } finally {
       setBusy(false);
     }
-  }, [judgment, projectId]);
+  }, [projectId]);
+
+  const openPanel = useCallback(() => {
+    setOpen(true);
+    if (judgment || busy) return;
+    void run();
+  }, [judgment, busy, run]);
 
   return (
     <>
@@ -95,6 +112,7 @@ export default function AnimaticJudgePanel() {
                   <h2 className="text-[11px] font-semibold uppercase tracking-[0.16em] text-zinc-300">
                     Animatic quality judge
                   </h2>
+                  {judgment && engine && <EngineChip engine={engine} />}
                 </div>
                 <button
                   onClick={() => setOpen(false)}
@@ -106,6 +124,13 @@ export default function AnimaticJudgePanel() {
               </div>
 
               <div className="p-4">
+                {!busy && error !== null && (
+                  <FailurePanel
+                    error={error}
+                    onRetry={run}
+                    retryLabel="Judge again"
+                  />
+                )}
                 {busy && (
                   <div className="space-y-4">
                     <div className="flex items-center gap-4">

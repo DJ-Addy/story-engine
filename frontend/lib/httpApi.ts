@@ -19,12 +19,16 @@ import type {
   Eyeline,
   Finding,
   GrammarProfile,
+  JudgeEngine,
   RankingResult,
   SceneMarker,
   SfxMarker,
   ShotSize,
   ShotSpec,
+  ShotVideo,
   TimelineData,
+  VideoRenderRequest,
+  VideoRenderResult,
   VisualClip,
   Voice,
   VoiceFitRequest,
@@ -34,7 +38,15 @@ import type {
 import { EMOTIONS, SHOT_SIZES } from "@/lib/types";
 import type { CharacterSignal } from "@/lib/judge";
 import { MOCK_VOICE_POOL } from "@/lib/mock";
-import { ContractMismatchError, request, requestOptional } from "@/lib/apiClient";
+import {
+  API_BASE_URL,
+  ApiError,
+  clearToken,
+  ContractMismatchError,
+  getToken,
+  request,
+  requestOptional,
+} from "@/lib/apiClient";
 
 // --------------------------------------------------------------------------- //
 // Wire shapes — mirror backend/app/api/schemas.py and app/ingest/elements.py.
@@ -409,12 +421,59 @@ function toTimeline(
 
   return {
     projectId,
+    sceneOrdinal: wire.scene_ordinal,
     sceneTitle: wire.markers[0]?.slugline ?? `Scene ${wire.scene_ordinal}`,
     durationMs: wire.duration_ms,
     scenes,
     lanes: { visual, dialogue, ambience, sfx },
   };
 }
+
+// --------------------------------------------------------------------------- //
+// Shot video renders
+//
+// GET .../render/video/{scene}/{shot} is the one endpoint in the API that does
+// not always answer JSON: it returns raw `video/mp4` bytes when the clip is
+// held (or read back out of the bucket), and a JSON provider-URL card when it
+// is not. `request()` in apiClient always decodes JSON, so this path issues its
+// own fetch — using apiClient's base URL and token so auth stays in one place.
+// --------------------------------------------------------------------------- //
+
+/** JSON fallback body of GET .../render/video/{scene}/{shot}. */
+interface VideoRefWire {
+  output_urls: string[];
+  provider: string;
+  model: string;
+  duration_ms: number;
+}
+
+interface VideoRenderOutWire {
+  scene_ordinal: number;
+  shot_ordinal: number;
+  duration_ms: number;
+  cost_cents: number;
+  provider: string;
+  model: string;
+  source: string;
+  output_urls: string[];
+  has_video: boolean;
+}
+
+const toVideoRenderResult = (w: VideoRenderOutWire): VideoRenderResult => ({
+  scene_ordinal: w.scene_ordinal,
+  shot_ordinal: w.shot_ordinal,
+  duration_ms: w.duration_ms,
+  cost_cents: w.cost_cents,
+  provider: w.provider,
+  model: w.model,
+  source: w.source === "image" ? "image" : "text",
+  output_urls: [...w.output_urls],
+  has_video: w.has_video,
+});
+
+/** A provider URL a browser can actually put in `<video src>`. `gs://` cannot
+ * be fetched by a browser at all, so it is kept as a reference, never a src. */
+const isPlayableUrl = (url: string): boolean => /^https?:\/\//i.test(url);
 
 // --------------------------------------------------------------------------- //
 // Casting seed
@@ -443,6 +502,11 @@ function seedCasting(
 // --------------------------------------------------------------------------- //
 
 export class HttpApi implements StoryEngineApi {
+  /** Every score this client returns came out of FastAPI's `app/judge`. The
+   * local port in `lib/judge.ts` is never consulted here — if the server fails,
+   * the caller sees the failure rather than a silently substituted number. */
+  readonly judgeEngine: JudgeEngine = "backend";
+
   /** `SceneShotList` requires an `action_axis` that `SceneData` does not carry.
    * `getScene` already reads it from GET /shots, so cache it per scene instead
    * of paying a second round trip on every validate. */
@@ -540,6 +604,9 @@ export class HttpApi implements StoryEngineApi {
       // GAP: no stored casting variants (no /projects/{id}/casting/candidates).
       // The leaderboard starts empty; the user snapshots candidates locally.
       candidates: [],
+      // The pool above is fixture data even on this live path. Flagged so the
+      // studio can say so instead of passing stub voice names off as a catalog.
+      voicesAreStub: true,
     };
   }
 
@@ -588,5 +655,94 @@ export class HttpApi implements StoryEngineApi {
       ),
     ]);
     return toTimeline(pid, timeline, shots);
+  }
+
+  /**
+   * GET .../render/video/{scene}/{shot}.
+   *
+   * A 404 is the *expected* answer for almost every shot — video renders cost
+   * provider credits, so one has usually never been made — and resolves to
+   * `null` rather than throwing. Anything else (401, 502 from a bucket read,
+   * a network failure) throws, because those are real problems the editor must
+   * show rather than paper over as "no video".
+   */
+  async getShotVideo(
+    projectId: string,
+    sceneOrdinal: number,
+    shotOrdinal: number,
+  ): Promise<ShotVideo | null> {
+    const pid = resolveProjectId(projectId);
+    const path = `/projects/${encodeURIComponent(pid)}/render/video/${sceneOrdinal}/${shotOrdinal}`;
+
+    const headers: Record<string, string> = { Accept: "video/mp4, application/json" };
+    const token = getToken();
+    if (token) headers.Authorization = `Bearer ${token}`;
+
+    const res = await fetch(`${API_BASE_URL}${path}`, {
+      headers,
+      credentials: "same-origin",
+    });
+
+    if (res.status === 404) return null;
+    if (res.status === 401) {
+      clearToken();
+      throw new ApiError(401, "Not authenticated — sign in again", path);
+    }
+    if (!res.ok) {
+      const body = await res.json().catch(() => null);
+      const detail =
+        body && typeof body === "object" && typeof (body as { detail?: unknown }).detail === "string"
+          ? (body as { detail: string }).detail
+          : `${res.status} ${res.statusText}`;
+      throw new ApiError(res.status, detail, path);
+    }
+
+    const contentType = res.headers.get("content-type") ?? "";
+
+    // Provider-reference card: the render exists but the bytes live in a bucket
+    // this deployment cannot read through. Report it honestly — no fake player.
+    if (contentType.includes("application/json")) {
+      const ref = (await res.json()) as VideoRefWire;
+      const urls = Array.isArray(ref.output_urls) ? ref.output_urls : [];
+      const playable = urls.find(isPlayableUrl) ?? null;
+      return {
+        sceneOrdinal,
+        shotOrdinal,
+        src: playable,
+        srcIsObjectUrl: false,
+        providerUrls: urls.filter((u) => u !== playable),
+        durationMs: typeof ref.duration_ms === "number" ? ref.duration_ms : null,
+        provider: ref.provider ?? null,
+        model: ref.model ?? null,
+      };
+    }
+
+    // The ordinary success: mp4 bytes. Wrapped in an object URL the caller owns
+    // and must revoke (see `revokeShotVideo` in lib/timelineStore.ts).
+    const blob = await res.blob();
+    return {
+      sceneOrdinal,
+      shotOrdinal,
+      src: URL.createObjectURL(blob),
+      srcIsObjectUrl: true,
+      providerUrls: [],
+      durationMs: null, // the element reports the true duration on loadedmetadata
+      provider: null,
+      model: null,
+    };
+  }
+
+  /** POST .../render/video. Spends credits; 403 when rights are not attested
+   * and 402 when the cost governor refuses. Both arrive as `ApiError` with the
+   * server's own wording, which is exactly what the editor shows. */
+  async renderShotVideo(
+    projectId: string,
+    req: VideoRenderRequest,
+  ): Promise<VideoRenderResult> {
+    const wire = await request<VideoRenderOutWire>(
+      `/projects/${encodeURIComponent(resolveProjectId(projectId))}/render/video`,
+      { method: "POST", body: req },
+    );
+    return toVideoRenderResult(wire);
   }
 }
