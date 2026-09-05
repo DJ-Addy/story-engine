@@ -1,50 +1,166 @@
 # Story Engine
 
-A single ingestion engine that turns a screenplay (later: manuscript) into a structured
-story representation (the Story Graph IR), then renders that representation into:
+Turn a screenplay or novel into a **Story Graph IR**, then render that one
+representation into an immersive multi-voice audiobook *and* a previsualization
+package — shot list, continuity report, timeline, animatic, video.
 
-1. An immersive multi-voice audiobook with environmental sound design
-2. A previsualization package: shot list, continuity report, character boards, animatic
-
-See `PRD.md` and `HANDOFF.md` (project docs) for full context. **The IR is the product** —
-audio and visual outputs are renderers over the same story graph.
-
-## Repository layout
+**The IR is the product.** Audio and video are renderers over the same graph, AI
+judges score those renders, the timeline edits the graph, and every run is
+instrumented. Swap a renderer and nothing else moves.
 
 ```
-backend/            FastAPI + workers (Python 3.12)
-  app/
-    ingest/         Fountain / FDX / PDF screenplay parsers -> story graph
-    nlp/            attribution confidence, ambience tagging (phase 2: BookNLP)
-    shotlist/       LLM shot generation + Pydantic schema contract
-    continuity/     deterministic continuity rules + grammar profiles
-    render/audio/   TTS orchestration, speech-bus timing, ffmpeg mix assembly
-    render/visual/  character sheets, boards (image-to-image)
-    adapters/       provider adapters — NO provider SDK imported outside here
-    db/             SQLAlchemy models mirroring the PRD §3.2 schema
-    costs/          cost governor
-  tests/            pytest suite (TDD: tests are written with/before each module)
-frontend/           Next.js 15 App Router (scaffolded in a later milestone)
+        Screenplay / Novel
+                │
+                ▼
+        INGEST + NLP  ──────►  STORY GRAPH (IR)
+                                    │
+              ┌─────────────────────┼─────────────────────┐
+              ▼                     ▼                     ▼
+       AUDIO RENDERER        VISUAL RENDERER         AI JUDGES
+    Google Cloud TTS         Veo on Vertex AI     voice fit, animatic
+    voices, ambience,        shot list, boards,      ranking, bake-offs
+    speech-bus timing        continuity, video             │
+              └─────────────────────┴─────────────────────┘
+                                    │
+                                    ▼
+                      ClickHouse  ── scores, spend, latency
 ```
 
-## Development
+An **agent network on Gemini** drives that pipeline, and every judge run,
+render and cost decision is written to **ClickHouse** through the official MCP
+server and read back by a dashboard.
 
-```powershell
+---
+
+## Google Cloud and ClickHouse at runtime
+
+Both are imported and called in code, not named in passing. Where to look:
+
+| What | Where it is called | Entry point |
+|---|---|---|
+| **Agent Development Kit** (Agent Builder's code-first surface) | `backend/app/adapters/adk.py` — the only module that imports `google.adk` | `POST /api/v1/projects/{id}/agent/run/stream` |
+| **Gemini** on Vertex AI | `backend/app/adapters/gemini.py` | powers the coordinator and every specialist |
+| **Google Cloud TTS** (Gemini-TTS voices) | `backend/app/adapters/google_tts.py` | `POST /api/v1/projects/{id}/scenes/{n}/render/audio` |
+| **Veo** on Vertex AI | `backend/app/adapters/veo.py` | `POST /api/v1/projects/{id}/render/video` |
+| **Cloud Storage** | `backend/app/storage/gcs.py` | durable audio and video renders |
+| **Cloud SQL / Postgres** | `backend/app/db/repository.py` | durable projects, scripts, renders |
+| **ClickHouse via MCP** | `backend/app/analytics/mcp_client.py` — the only module that imports `mcp` | writes on every judge and render; reads at `/dashboard` |
+
+Fastest way to confirm a live deployment is really wired:
+
+```bash
+curl -s "$URL/api/v1/agent/network"
+```
+
+It reports `installed`, `project_configured` and `available` **separately**, so a
+`false` tells you which half is missing rather than just failing.
+
+---
+
+## The agent network
+
+A coordinator delegating to five specialists, each mapped onto a real pipeline
+stage. The tools are the actual ingest, shot-list, judge and render functions —
+not a parallel demo path.
+
+```
+story_director  (coordinator, Gemini)
+├── script_analyst      ingest prose/screenplay into the story graph
+├── shot_designer       generate shot lists, verify dialogue coverage
+├── casting_director    propose a cast, score it, act on the judge's notes
+├── previz_critic       score coverage, continuity, variety, pacing
+└── render_planner      assemble render prompts and price the scene
+```
+
+Specs live in `backend/app/agents/` and import no SDK at all; only
+`app/adapters/adk.py` turns them into ADK objects. `POST .../agent/run/stream`
+emits SSE frames — `run_started`, `message`, `delegation`, `tool_call`,
+`tool_result`, `run_completed` — so you can watch the delegation happen.
+
+---
+
+## Quick start
+
+```bash
+# Backend
 cd backend
-python -m venv .venv
-.venv\Scripts\Activate.ps1
-pip install -e ".[dev]"
-pytest
+python -m venv .venv && .venv/bin/pip install -e ".[dev]"   # Windows: .venv\Scripts\pip
+cp .env.example .env                                        # every var is optional
+.venv/bin/uvicorn app.api.main:app --reload
+
+# Frontend, in another shell
+cd frontend && npm install && npm run dev
 ```
 
-Requires Python 3.12+. PostgreSQL 16 and Redis are needed only for the API/worker
-integration layer; the core modules (parsers, validator, schema, timing, cost governor)
-are pure and run under pytest with no services.
+Open http://localhost:3000. **It runs with no cloud account and no credentials**
+— `next dev` defaults to mock data, the repository is in-memory, and renders
+stay in process. Nothing calls a provider until you configure one.
 
-## Engineering rules
+To point the UI at the live backend: `NEXT_PUBLIC_USE_MOCK_API=false npm run dev`.
+A production build defaults to live, so a deployed image can never quietly serve
+fixtures; the header badge always says which mode is active.
 
-- **TDD**: every module lands with its tests. Pure logic is kept free of I/O so it is
-  testable without network or database.
-- **Provider adapters are mandatory**: no provider SDK import outside `app/adapters/`.
-- **Cost caps**: the cost governor is enforced before any job enqueues. Fake providers
-  are used in all tests — tests must never spend API credits.
+### What works without credentials
+
+- Ingest a screenplay, browse the story graph, edit lines
+- Shot lists, continuity findings, the timeline editor
+- **The timeline works before anything is rendered** — onsets are planned from
+  the script by the same planner the renderer uses, and the response says
+  `timing_source: "estimated"` so a guess is never shown as a measurement
+
+Rendering audio or video, the AI judges, the agent network and the analytics
+dashboard each need their provider configured. Each degrades with an actionable
+message naming the missing variable rather than a blank screen.
+
+---
+
+## Routes
+
+| Group | Route |
+|---|---|
+| Auth | `POST /api/v1/auth/register`, `/auth/login` |
+| Projects | `POST\|GET /api/v1/projects`, `GET /projects/{id}` |
+| Script | `POST /projects/{id}/script`, `GET /graph`, `PATCH /scenes/{n}/lines/{l}` |
+| Novel | `POST /projects/{id}/novel`, `/novel/preview` |
+| Scenes | `POST /scenes/{n}/shotlist`, `GET /shots`, `PATCH /findings/{id}` |
+| Audio | `POST /scenes/{n}/render/audio`, `GET /audio` |
+| Timeline | `GET /scenes/{n}/timeline`, `POST /timeline/edits` |
+| Video | `POST /projects/{id}/render/video`, `GET /render/video/{scene}/{shot}` |
+| Judges | `POST /projects/{id}/judge/voices`, `/judge/animatic`, `/judge/rank/voices`, `/judge/rank/animatic` |
+| Agent | `GET /api/v1/agent/network`, `POST /projects/{id}/agent/run`, `/agent/run/stream` |
+| Analytics | `GET /projects/{id}/analytics/dashboard` + 8 panel routes |
+
+Interactive docs at `/docs`.
+
+---
+
+## Architecture rules
+
+These are enforced by tests, not convention:
+
+1. **No provider SDK outside `app/adapters/`.** `google.adk`, `google.auth` and
+   `mcp` each have exactly one importing module, and all are imported lazily —
+   the suite collects and passes with none of them installed.
+2. **Tests never hit the network and never spend credits.** HTTP is stubbed at
+   the session seam; credential failure and oversize input assert *zero* HTTP
+   calls, so a misconfigured deploy fails before it can bill you.
+3. **The cost governor runs before any paid call**, and refusals are recorded to
+   ClickHouse with the headroom that caused them.
+4. **Estimates are never presented as measurements.** `timing_source` is a
+   required field with no default, so a caller cannot omit its way into a lie.
+
+```bash
+cd backend && .venv/bin/python -m pytest -q     # 1118 tests
+cd frontend && npm run build && npx tsc --noEmit
+```
+
+---
+
+## Deploying
+
+See **[DEPLOY.md](DEPLOY.md)** — one container on Cloud Run, with the service
+account roles, bucket, secrets and Cloud SQL steps spelled out.
+
+## Licence
+
+MIT — see [LICENSE](LICENSE).
