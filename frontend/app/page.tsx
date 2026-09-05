@@ -35,26 +35,18 @@ export default function Home() {
                 </li>
                 <li>
                   <Link
+                    href="/workspace"
+                    className={`rounded-sm transition-colors hover:text-zinc-50 ${FOCUS_RING}`}
+                  >
+                    Workspace
+                  </Link>
+                </li>
+                <li>
+                  <Link
                     href="/casting"
                     className={`rounded-sm transition-colors hover:text-zinc-50 ${FOCUS_RING}`}
                   >
                     Casting
-                  </Link>
-                </li>
-                <li>
-                  <Link
-                    href="/timeline"
-                    className={`rounded-sm transition-colors hover:text-zinc-50 ${FOCUS_RING}`}
-                  >
-                    Timeline
-                  </Link>
-                </li>
-                <li>
-                  <Link
-                    href="/scenes/demo"
-                    className={`rounded-sm transition-colors hover:text-zinc-50 ${FOCUS_RING}`}
-                  >
-                    Demo
                   </Link>
                 </li>
               </ul>

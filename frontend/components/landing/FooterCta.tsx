@@ -12,7 +12,7 @@ export default function FooterCta() {
             Your manuscript already knows how it wants to sound.
           </p>
           <Link
-            href="/scenes/demo"
+            href="/workspace"
             className={`mt-10 inline-block rounded-md bg-amber-400 px-6 py-3 text-sm font-medium text-zinc-950 transition-colors hover:bg-amber-300 ${FOCUS_RING}`}
           >
             Open the demo workspace
@@ -41,18 +41,10 @@ export default function FooterCta() {
               </li>
               <li>
                 <Link
-                  href="/timeline"
+                  href="/workspace"
                   className={`rounded-sm transition-colors hover:text-zinc-200 ${FOCUS_RING}`}
                 >
-                  Timeline
-                </Link>
-              </li>
-              <li>
-                <Link
-                  href="/scenes/demo"
-                  className={`rounded-sm transition-colors hover:text-zinc-200 ${FOCUS_RING}`}
-                >
-                  Demo
+                  Workspace
                 </Link>
               </li>
               <li>

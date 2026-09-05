@@ -24,9 +24,16 @@ const MIN_CLIP_PX = 40;
 export function VisualLane({
   clips,
   pxPerSecond,
+  highlightShotOrdinal = null,
+  onShotHover,
 }: {
   clips: VisualClip[];
   pxPerSecond: number;
+  /** Ring this shot's clip without selecting it — the workspace passes the shot
+   * the pointer is over in the shot list, so both surfaces point at one shot. */
+  highlightShotOrdinal?: number | null;
+  /** Mirrors the hover back out, so hovering a clip lights up its shot row. */
+  onShotHover?: (shotOrdinal: number | null) => void;
 }) {
   const reduce = useReducedMotion();
   const selectAndSeek = useTimelineStore((s) => s.selectAndSeek);
@@ -37,6 +44,7 @@ export function VisualLane({
     <AnimatePresence initial={false}>
       {clips.map((c) => {
         const selected = selectedId === c.id;
+        const linked = !selected && highlightShotOrdinal === c.shotOrdinal;
         return (
           <motion.button
             layout
@@ -46,6 +54,8 @@ export function VisualLane({
             exit={reduce ? undefined : { opacity: 0, scale: 0.96 }}
             transition={{ duration: 0.3, ease: EASE }}
             onClick={() => selectAndSeek({ lane: "visual", id: c.id })}
+            onPointerEnter={() => onShotHover?.(c.shotOrdinal)}
+            onPointerLeave={() => onShotHover?.(null)}
             style={
               {
                 left: msToPx(c.startMs, pxPerSecond),
@@ -55,7 +65,7 @@ export function VisualLane({
                 ["--tl-accent"]: "var(--tl-visual)",
               } as CSSProperties
             }
-            className={`tl-clip tl-visual-board text-left ${selected ? "tl-clip-selected" : ""} ${FOCUS_RING}`}
+            className={`tl-clip tl-visual-board text-left ${selected ? "tl-clip-selected" : ""} ${linked ? "tl-clip-linked" : ""} ${FOCUS_RING}`}
             title={c.label}
           >
             <div className="flex h-full flex-col justify-between p-1.5">

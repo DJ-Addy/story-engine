@@ -55,10 +55,10 @@ export default function AxisDiagram() {
   const subjectB = { x: CX + SUBJECT_GAP / 2, y: CY, name: subjects[1] ?? "?" };
 
   return (
-    <div className="border border-zinc-800 rounded-md bg-zinc-950 flex flex-col">
-      <div className="flex items-center justify-between px-3 py-2 border-b border-zinc-800">
-        <h2 className="text-xs font-semibold uppercase tracking-wider text-zinc-400">
-          Axis Map
+    <div className="cast-panel flex flex-col overflow-hidden">
+      <div className="flex items-center justify-between border-b border-[var(--hairline)] px-3 py-2">
+        <h2 className="text-[11px] font-semibold uppercase tracking-[0.16em] text-zinc-300">
+          Axis map
         </h2>
         <span className="text-[10px] font-mono text-zinc-600">
           top-down · a below / b above

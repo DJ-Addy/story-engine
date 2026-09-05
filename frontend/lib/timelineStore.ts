@@ -122,6 +122,10 @@ interface TimelineState {
   ): void;
   /** Release every blob URL held by the map (unmount / reload). */
   clearVideos(): void;
+  /** Drop the loaded timeline entirely (the workspace switching scenes), so no
+   * stale lanes are shown against the new scene. Releases blob URLs like
+   * `load` does — every path out of a loaded timeline frees its object URLs. */
+  clear(): void;
 }
 
 /** Deep clone so store edits never mutate the loaded/fixture data in place. */
@@ -342,5 +346,19 @@ export const useTimelineStore = create<TimelineState>((set, get) => ({
   clearVideos() {
     for (const state of Object.values(get().videos)) revokeShotVideo(state);
     set({ videos: {} });
+  },
+
+  clear() {
+    for (const state of Object.values(get().videos)) revokeShotVideo(state);
+    set({
+      data: null,
+      durationMs: 0,
+      currentMs: 0,
+      isPlaying: false,
+      selection: null,
+      appliedEdits: [],
+      videos: {},
+      // `muted` and `pxPerSecond` are the viewer's settings, not the scene's.
+    });
   },
 }));

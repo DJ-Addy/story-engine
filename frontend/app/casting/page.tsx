@@ -1,7 +1,6 @@
 "use client";
 
 import { useCallback, useEffect, useState } from "react";
-import Link from "next/link";
 import { api, type CastingData } from "@/lib/api";
 import { useCastingStore } from "@/lib/castingStore";
 import SceneHero from "@/components/casting/SceneHero";
@@ -11,7 +10,7 @@ import CandidateLeaderboard from "@/components/casting/CandidateLeaderboard";
 import AnimaticJudgePanel from "@/components/casting/AnimaticJudgePanel";
 import { FailurePanel } from "@/components/casting/JudgeStatus";
 import ApiModeBadge from "@/components/ApiModeBadge";
-import { FOCUS_RING } from "@/components/casting/theme";
+import AppNav from "@/components/AppNav";
 
 type LoadState = "loading" | "ready" | "failed";
 
@@ -66,41 +65,15 @@ export default function CastingStudioPage() {
 
   return (
     <div className="min-h-screen bg-[var(--cast-bg)] text-zinc-200">
-      <header className="sticky top-0 z-40 border-b border-[var(--hairline)] bg-[var(--cast-bg)]/85 backdrop-blur-md">
-        <div className="mx-auto flex max-w-7xl items-center gap-3 px-5 py-3 sm:px-8">
-          <Link
-            href="/"
-            className={`rounded-sm text-xs font-medium text-zinc-400 transition-colors hover:text-zinc-100 ${FOCUS_RING}`}
-          >
-            Story Engine
-          </Link>
-          <span className="text-zinc-700" aria-hidden>
-            /
+      <AppNav>
+        {casting && (
+          <span className="hidden max-w-[22rem] truncate rounded border border-[var(--hairline)] px-1.5 py-0.5 font-mono text-[10px] text-zinc-500 lg:inline">
+            {casting.title}
           </span>
-          <h1 className="font-mono text-xs text-zinc-100">Casting Studio</h1>
-          {casting && (
-            <span className="hidden rounded border border-[var(--hairline)] px-1.5 py-0.5 font-mono text-[10px] text-zinc-500 md:inline">
-              {casting.title}
-            </span>
-          )}
-          <div className="ml-auto flex items-center gap-3">
-            <ApiModeBadge />
-            <AnimaticJudgePanel />
-            <Link
-              href="/timeline"
-              className={`rounded-sm text-xs text-zinc-400 transition-colors hover:text-zinc-100 ${FOCUS_RING}`}
-            >
-              Timeline →
-            </Link>
-            <Link
-              href="/scenes/demo"
-              className={`rounded-sm text-xs text-zinc-400 transition-colors hover:text-zinc-100 ${FOCUS_RING}`}
-            >
-              Scene workspace →
-            </Link>
-          </div>
-        </div>
-      </header>
+        )}
+        <ApiModeBadge />
+        <AnimaticJudgePanel />
+      </AppNav>
 
       <SceneHero />
 

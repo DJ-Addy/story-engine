@@ -8,15 +8,19 @@ import type { TimelineLaneKind } from "@/lib/types";
 /** Width (px) of the sticky lane-label column on the left. */
 export const LABEL_WIDTH = 118;
 
-/** Height (px) of the ruler row that sits above the lanes. */
-export const RULER_HEIGHT = 44;
+/** Height (px) of the ruler row that sits above the lanes.
+ *
+ * The ruler and the lane heights below are sized so that ruler + all four
+ * lanes fit inside the workspace's docked timeline on a 900px-tall laptop
+ * without the page scrolling as a whole (see components/workspace). */
+export const RULER_HEIGHT = 40;
 
 /** Per-lane row heights (px). */
 export const LANE_HEIGHT: Record<TimelineLaneKind, number> = {
-  visual: 92,
-  dialogue: 76,
-  ambience: 54,
-  sfx: 46,
+  visual: 72,
+  dialogue: 60,
+  ambience: 44,
+  sfx: 38,
 };
 
 /** Top-to-bottom lane order shared by the labels column and the track. */

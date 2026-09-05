@@ -354,7 +354,11 @@ export default function VideoMonitor() {
     );
 
   return (
-    <div className="cast-panel flex h-full flex-col">
+    // Height is INTRINSIC: header + the 16:9 stage + footer. The workspace
+    // derives the monitor's width from the height it can spare (.ws-monitor-fit
+    // in globals.css), so the stage keeps its exact 16:9 box at every size and
+    // the panel never has to squash it to fit.
+    <div className="cast-panel flex flex-col">
       <div className="flex items-center gap-2.5 border-b border-[var(--hairline)] px-4 py-3">
         <span
           className="h-1.5 w-1.5 rounded-full"

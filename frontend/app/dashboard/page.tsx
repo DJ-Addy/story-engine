@@ -249,6 +249,12 @@ export default function AnalyticsDashboardPage() {
           </span>
           <div className="ml-auto flex items-center gap-4">
             <Link
+              href="/workspace"
+              className={`rounded-sm text-xs text-zinc-400 transition-colors hover:text-zinc-100 ${FOCUS_RING}`}
+            >
+              Workspace →
+            </Link>
+            <Link
               href="/casting"
               className={`rounded-sm text-xs text-zinc-400 transition-colors hover:text-zinc-100 ${FOCUS_RING}`}
             >

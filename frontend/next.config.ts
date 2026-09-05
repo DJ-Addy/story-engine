@@ -13,6 +13,20 @@ const nextConfig: NextConfig = {
   // Emits .next/standalone: server.js plus only the modules it actually
   // imports, so the Cloud Run image carries no node_modules and no npm.
   output: "standalone",
+  // /scenes/:id and /timeline were two halves of one job — a shot list here, a
+  // timeline there, no shared scene. They are now one route. 307 (permanent:
+  // false) rather than 308: this is a product layout decision, and a 308 is
+  // cached by browsers forever.
+  async redirects() {
+    return [
+      { source: "/timeline", destination: "/workspace", permanent: false },
+      {
+        source: "/scenes/:sceneId",
+        destination: "/workspace?scene=:sceneId",
+        permanent: false,
+      },
+    ];
+  },
   async rewrites() {
     return [
       {

@@ -27,6 +27,9 @@ interface Column {
   apply?(shot: ShotSpec, raw: string): Partial<ShotSpec>;
 }
 
+// Column order matters twice over: it is the on-screen order AND the tab order
+// (see EDITABLE_KEYS). `intent` sits third so the workspace's narrow shot list
+// reads "# · size · what the shot is for" before anything has to be scrolled.
 const COLUMNS: Column[] = [
   {
     key: "ordinal",
@@ -45,6 +48,14 @@ const COLUMNS: Column[] = [
     mono: true,
     getValue: (s) => s.size,
     apply: (_s, raw) => ({ size: raw as ShotSpec["size"] }),
+  },
+  {
+    key: "intent",
+    label: "Intent",
+    type: "text",
+    width: "min-w-56",
+    getValue: (s) => s.intent,
+    apply: (_s, raw) => ({ intent: raw }),
   },
   {
     key: "subjects",
@@ -125,14 +136,6 @@ const COLUMNS: Column[] = [
         .map((x) => Number(x.trim()))
         .filter((n) => Number.isInteger(n) && n > 0),
     }),
-  },
-  {
-    key: "intent",
-    label: "Intent",
-    type: "text",
-    width: "min-w-56",
-    getValue: (s) => s.intent,
-    apply: (_s, raw) => ({ intent: raw }),
   },
 ];
 
@@ -221,6 +224,9 @@ export default function ShotListEditor() {
   const shots = useSceneStore((s) => s.shots);
   const findings = useSceneStore((s) => s.findings);
   const selectedOrdinal = useSceneStore((s) => s.selectedOrdinal);
+  // Hover is shared state, not a CSS :hover — the timeline's visual lane writes
+  // it too, so pointing at a clip lights up its row here and vice versa.
+  const hoveredOrdinal = useSceneStore((s) => s.hoveredOrdinal);
   const editingCell = useSceneStore((s) => s.editingCell);
   const updateShot = useSceneStore((s) => s.updateShot);
   const reorderShot = useSceneStore((s) => s.reorderShot);
@@ -310,27 +316,30 @@ export default function ShotListEditor() {
   };
 
   return (
-    <div className="flex flex-col h-full min-h-0 border border-zinc-800 rounded-md bg-zinc-950">
-      <div className="flex items-center justify-between px-3 py-2 border-b border-zinc-800">
-        <h2 className="text-xs font-semibold uppercase tracking-wider text-zinc-400">
-          Shot List
+    <div className="cast-panel flex h-full min-h-0 flex-col overflow-hidden">
+      <div className="flex items-center justify-between gap-3 border-b border-[var(--hairline)] px-3 py-2">
+        <h2 className="text-[11px] font-semibold uppercase tracking-[0.16em] text-zinc-300">
+          Shot list
         </h2>
-        <span className="text-[11px] font-mono text-zinc-500">
+        <span className="truncate font-mono text-[10px] text-zinc-500">
           {ordered.length} shots · arrows move · enter edits · tab commits →
         </span>
       </div>
+      {/* data-local-arrow-keys: this grid owns the arrow keys inside it, and the
+          workspace's transport shortcuts read the attribute and keep off. */}
       <div
         ref={containerRef}
         tabIndex={0}
         onKeyDown={handleKeyDown}
-        className="overflow-auto flex-1 min-h-0 outline-none focus:ring-1 focus:ring-sky-800/60"
+        data-local-arrow-keys="true"
+        className="cast-scroll min-h-0 flex-1 overflow-auto outline-none focus:ring-1 focus:ring-sky-800/60"
       >
         <table className="w-full text-xs border-collapse">
-          <thead className="sticky top-0 bg-zinc-900 z-10">
+          <thead className="sticky top-0 z-10 bg-[#141417]">
             <tr className="text-left text-[10px] uppercase tracking-wider text-zinc-500">
-              <th className="px-1 py-1.5 w-14 border-b border-zinc-800"></th>
+              <th className="w-14 border-b border-[var(--hairline)] px-1 py-1.5"></th>
               {COLUMNS.map((c) => (
-                <th key={c.key} className={`px-2 py-1.5 border-b border-zinc-800 ${c.width}`}>
+                <th key={c.key} className={`border-b border-[var(--hairline)] px-2 py-1.5 ${c.width}`}>
                   {c.label}
                 </th>
               ))}
@@ -340,6 +349,7 @@ export default function ShotListEditor() {
             {ordered.map((shot, i) => {
               const severity = worstUnresolvedSeverity(shot.ordinal);
               const isSelected = selectedOrdinal === shot.ordinal;
+              const isHovered = !isSelected && hoveredOrdinal === shot.ordinal;
               const rowTint =
                 severity === "error"
                   ? "bg-red-950/40"
@@ -355,8 +365,12 @@ export default function ShotListEditor() {
                     if (el) rowRefs.current.set(shot.ordinal, el);
                     else rowRefs.current.delete(shot.ordinal);
                   }}
-                  className={`border-b border-zinc-900 hover:bg-zinc-900/60 ${rowTint} ${
-                    isSelected ? "outline outline-1 -outline-offset-1 outline-sky-600 bg-zinc-900/80" : ""
+                  className={`border-b border-[var(--hairline)] hover:bg-zinc-900/60 ${rowTint} ${
+                    isSelected
+                      ? "outline outline-1 -outline-offset-1 outline-sky-600 bg-zinc-900/80"
+                      : isHovered
+                        ? "bg-sky-950/30 outline outline-1 -outline-offset-1 outline-sky-800/70"
+                        : ""
                   }`}
                   onClick={() => selectShot(shot.ordinal)}
                   onMouseEnter={() => hoverShot(shot.ordinal)}

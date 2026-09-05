@@ -19,7 +19,7 @@ function FindingRow({ finding }: { finding: Finding }) {
 
   return (
     <div
-      className={`px-3 py-2 border-b border-zinc-900 text-xs ${
+      className={`border-b border-[var(--hairline)] px-3 py-2 text-xs ${
         finding.deliberate ? "opacity-50" : ""
       }`}
     >
@@ -93,7 +93,7 @@ export default function ContinuityPanel() {
   }, [findings]);
 
   const modeToggle = (
-    <div className="flex rounded border border-zinc-800 overflow-hidden text-[10px] font-mono">
+    <div className="flex shrink-0 overflow-hidden rounded border border-[var(--hairline)] font-mono text-[10px]">
       {(["strict", "silent"] as const).map((mode) => (
         <button
           key={mode}
@@ -115,9 +115,9 @@ export default function ContinuityPanel() {
 
   if (validatorMode === "silent" && !openInSilent) {
     return (
-      <div className="flex flex-col gap-2 border border-zinc-800 rounded-md bg-zinc-950 p-3">
+      <div className="cast-panel flex flex-col gap-2 p-3">
         <div className="flex items-center justify-between">
-          <h2 className="text-xs font-semibold uppercase tracking-wider text-zinc-400">
+          <h2 className="text-[11px] font-semibold uppercase tracking-[0.16em] text-zinc-300">
             Continuity
           </h2>
           {modeToggle}
@@ -135,10 +135,10 @@ export default function ContinuityPanel() {
   }
 
   return (
-    <div className="flex flex-col h-full min-h-0 border border-zinc-800 rounded-md bg-zinc-950">
-      <div className="flex items-center justify-between px-3 py-2 border-b border-zinc-800">
-        <div className="flex items-center gap-2">
-          <h2 className="text-xs font-semibold uppercase tracking-wider text-zinc-400">
+    <div className="cast-panel flex h-full min-h-0 flex-col overflow-hidden">
+      <div className="flex items-center justify-between gap-2 border-b border-[var(--hairline)] px-3 py-2">
+        <div className="flex min-w-0 flex-wrap items-center gap-2">
+          <h2 className="text-[11px] font-semibold uppercase tracking-[0.16em] text-zinc-300">
             Continuity
           </h2>
           {SEVERITY_ORDER.map((sev) =>
@@ -159,7 +159,7 @@ export default function ContinuityPanel() {
         </div>
         {modeToggle}
       </div>
-      <div className="overflow-auto flex-1 min-h-0">
+      <div className="cast-scroll min-h-0 flex-1 overflow-auto">
         {grouped.length === 0 && (
           <p className="px-3 py-4 text-xs text-zinc-600">
             No findings. The validator found no continuity issues.
@@ -167,7 +167,7 @@ export default function ContinuityPanel() {
         )}
         {grouped.map(([ruleCode, ruleFindings]) => (
           <div key={ruleCode}>
-            <div className="sticky top-0 bg-zinc-900/95 px-3 py-1 border-b border-zinc-800">
+            <div className="sticky top-0 border-b border-[var(--hairline)] bg-[#141417] px-3 py-1">
               <span className="font-mono text-[10px] uppercase tracking-wider text-zinc-500">
                 {ruleCode}
               </span>

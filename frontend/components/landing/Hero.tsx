@@ -124,7 +124,7 @@ export default function Hero() {
           className="mt-10 flex flex-wrap items-center gap-4"
         >
           <Link
-            href="/scenes/demo"
+            href="/workspace"
             className={`rounded-md bg-amber-400 px-5 py-2.5 text-sm font-medium text-zinc-950 transition-colors hover:bg-amber-300 ${FOCUS_RING}`}
           >
             Open the demo workspace

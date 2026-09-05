@@ -290,6 +290,15 @@ body {
       var(--shadow-raised);
   }
 
+  /* Linked, not selected: the clip whose shot is hovered in the shot list.
+     Lighter than .tl-clip-selected so the two never read as the same state. */
+  .tl-clip-linked {
+    border-color: rgb(var(--tl-accent, 161 161 170) / 0.8);
+    box-shadow:
+      0 0 0 1px rgb(var(--tl-accent, 161 161 170) / 0.35),
+      var(--shadow-card);
+  }
+
   /* Storyboard placeholder fill — no real images, just a styled card. */
   .tl-visual-board {
     background:
@@ -358,5 +367,52 @@ body {
   }
   .tl-clip:hover {
     filter: none;
+  }
+}
+
+/* ===================================================================== */
+/* Workspace (one route: monitor + shot list + docked timeline)          */
+/* ===================================================================== */
+
+/**
+ * The program monitor's width, derived from the height the layout can spare.
+ *
+ * VideoMonitor's stage is a fixed 16:9 box that must never be squashed, so the
+ * panel is sized the other way round: this wrapper takes the row height minus
+ * the monitor's own header+footer chrome, and `aspect-ratio` turns that height
+ * into the matching width. The panel inside is height-auto, so it renders
+ * exactly chrome + stage and lands flush with the bottom of the row. When the
+ * column is narrower than that (a tall, narrow window) `max-width` wins and the
+ * panel is simply shorter than the row.
+ */
+.ws-monitor-fit {
+  /* Measured: the monitor's header is 45px and its footer 38-55px depending on
+     whether the caption wraps. Reserving the wrapped height means the panel is
+     at worst a few px short of the row, never a few px clipped by it. */
+  --ws-monitor-chrome: 100px;
+  height: calc(100% - var(--ws-monitor-chrome));
+  /* A viewport too short for any monitor at all still gets one. */
+  min-height: 120px;
+  aspect-ratio: 16 / 9;
+  max-width: 100%;
+  margin-inline: auto;
+}
+
+/* The drag handle that resizes the docked timeline. */
+.ws-dock-grip {
+  background: var(--hairline-strong);
+  transition: background-color 0.15s ease;
+}
+.ws-dock-resizer:hover .ws-dock-grip,
+.ws-dock-resizer:focus-visible .ws-dock-grip {
+  background: rgb(var(--tl-playhead) / 0.75);
+}
+
+@media (max-width: 1023px) {
+  /* Stacked layout: the monitor is width-led again and the region scrolls. */
+  .ws-monitor-fit {
+    height: auto;
+    aspect-ratio: auto;
+    width: 100%;
   }
 }
