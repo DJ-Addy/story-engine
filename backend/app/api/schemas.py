@@ -15,6 +15,7 @@ from app.adapters.base import Voice
 from app.ingest.elements import StoryGraph
 from app.judge.model import AnimaticJudgment, RankingResult, VoiceFitResult
 from app.judge.ranking import AnimaticCandidate, VoiceCandidate
+from app.render.assist import AssistProposal, AssistTurn
 from app.render.audio.model import SceneRenderSettings
 from app.render.timeline_edits import TimelineEdit
 from app.shotlist.schema import ShotSpec
@@ -317,3 +318,32 @@ class VoiceRankingOut(RankingResult[VoiceFitResult]):
 
 class AnimaticRankingOut(RankingResult[AnimaticJudgment]):
     """Response for POST .../judge/rank/animatic; a leaderboard of animatic variants."""
+
+
+# --------------------------------------------------------------------------- #
+# Edit assistant
+# --------------------------------------------------------------------------- #
+class AssistRequest(BaseModel):
+    """Body for POST .../scenes/{ordinal}/assist.
+
+    ``history`` is the conversation as the panel holds it — the assistant is
+    stateless, so continuity is the client's to carry. It is bounded because an
+    unbounded transcript is an unbounded prompt, and the prompt is what the cost
+    governor is charged for.
+    """
+
+    message: str = Field(min_length=1, max_length=4000)
+    history: list[AssistTurn] = Field(default_factory=list, max_length=20)
+
+
+class AssistOut(AssistProposal):
+    """Response for POST .../scenes/{ordinal}/assist.
+
+    Every op in ``edits`` has already been dry-run against this scene's real
+    state, so Apply (``POST .../timeline/edits``) is a batch that will land.
+    ``estimated_cost_cents`` is the governor's pre-flight number — an estimate,
+    which is also what was charged to the project, never a measurement of what
+    the provider billed.
+    """
+
+    estimated_cost_cents: int

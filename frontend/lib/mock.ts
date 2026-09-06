@@ -357,18 +357,25 @@ const VISUAL_SPANS: Record<number, [number, number]> = {
   10: [52000, 8000],
 };
 
-const TIMELINE_VISUAL: VisualClip[] = MOCK_SHOTS.map((s) => {
-  const [startMs, durationMs] = VISUAL_SPANS[s.ordinal];
-  return {
-    id: `vis-${s.ordinal}`,
-    startMs,
-    durationMs,
-    shotOrdinal: s.ordinal,
-    size: s.size,
-    label: s.intent,
-    subjects: [...s.subjects],
-  };
-});
+function buildVisual(
+  shots: ShotSpec[],
+  spans: Record<number, [number, number]>,
+): VisualClip[] {
+  return shots.map((s) => {
+    const [startMs, durationMs] = spans[s.ordinal];
+    return {
+      id: `vis-${s.ordinal}`,
+      startMs,
+      durationMs,
+      shotOrdinal: s.ordinal,
+      size: s.size,
+      label: s.intent,
+      subjects: [...s.subjects],
+    };
+  });
+}
+
+const TIMELINE_VISUAL: VisualClip[] = buildVisual(MOCK_SHOTS, VISUAL_SPANS);
 
 /** One dialogue line and the shot ordinal whose span it plays under. */
 interface DialogueSpec {
@@ -403,7 +410,10 @@ const DIALOGUE_SPECS: DialogueSpec[] = [
 /** ~6% breathing gap after each line before the next in the same shot. */
 const DIALOGUE_GAP = 0.06;
 
-function buildDialogue(specs: DialogueSpec[]): DialogueClip[] {
+function buildDialogue(
+  specs: DialogueSpec[],
+  spans: Record<number, [number, number]>,
+): DialogueClip[] {
   const byShot = new Map<number, DialogueSpec[]>();
   for (const spec of specs) {
     const list = byShot.get(spec.shot) ?? [];
@@ -412,7 +422,7 @@ function buildDialogue(specs: DialogueSpec[]): DialogueClip[] {
   }
   const clips: DialogueClip[] = [];
   for (const [shot, lines] of byShot) {
-    const [start, duration] = VISUAL_SPANS[shot];
+    const [start, duration] = spans[shot];
     const slot = duration / lines.length;
     lines.forEach((spec, i) => {
       clips.push({
@@ -446,7 +456,7 @@ export const MOCK_TIMELINE: TimelineData = {
   ],
   lanes: {
     visual: TIMELINE_VISUAL,
-    dialogue: buildDialogue(DIALOGUE_SPECS),
+    dialogue: buildDialogue(DIALOGUE_SPECS, VISUAL_SPANS),
     ambience: [
       { id: "amb-room", tag: "tavern room tone", startMs: 0, durationMs: 60000 },
       { id: "amb-hearth", tag: "hearth fire", startMs: 0, durationMs: 46000 },
@@ -462,3 +472,175 @@ export const MOCK_TIMELINE: TimelineData = {
     ],
   },
 };
+
+// --------------------------------------------------------------------------- //
+// Scene 2 — so the workspace's scene rail has something to be a rail OF.
+// --------------------------------------------------------------------------- //
+// The rail lists the project's scenes and selecting one drives both views, which
+// is only meaningful if the second scene is genuinely a different scene: its own
+// shot list, its own lines, its own lanes. Authored to the same standard as
+// scene 1 (a real coverage pattern with one honest continuity problem — shots 4
+// and 5 sit on opposite sides of the axis with no neutral cutaway between them).
+
+export const MOCK_SCENE_2_TITLE = "INT. THE OLD MILL — CELLAR — LATER";
+
+const MOCK_SHOTS_2: ShotSpec[] = [
+  {
+    ordinal: 1,
+    size: "ws",
+    subjects: ["Mara"],
+    axis_side: "neutral",
+    lens_mm: 24,
+    camera_height: "high",
+    movement: "handheld",
+    eyeline: "none",
+    covers_lines: [1],
+    intent: "Mara descends the cellar stair; establish the vault door and the damp",
+  },
+  {
+    ordinal: 2,
+    size: "mcu",
+    subjects: ["Mara"],
+    axis_side: "a",
+    lens_mm: 50,
+    camera_height: "eye",
+    movement: "static",
+    eyeline: "off_axis",
+    covers_lines: [2, 3],
+    intent: "Mara reads the tumblers; the key is the wrong shape for the lock",
+  },
+  {
+    ordinal: 3,
+    size: "insert",
+    subjects: ["Mara"],
+    axis_side: "neutral",
+    lens_mm: 85,
+    camera_height: "high",
+    movement: "static",
+    eyeline: "none",
+    covers_lines: [4],
+    intent: "Insert: the brass key turns anyway, and the vault gives",
+  },
+  {
+    ordinal: 4,
+    size: "cu",
+    subjects: ["Lyra"],
+    axis_side: "a",
+    lens_mm: 65,
+    camera_height: "eye",
+    movement: "static",
+    eyeline: "off_axis",
+    covers_lines: [5, 6],
+    intent: "Lyra steps out of the dark behind her; she has been waiting",
+  },
+  {
+    ordinal: 5,
+    size: "ms",
+    subjects: ["Mara", "Lyra"],
+    axis_side: "b",
+    lens_mm: 35,
+    camera_height: "eye",
+    movement: "static",
+    eyeline: "none",
+    covers_lines: [7],
+    intent: "Two-shot across the open vault as the ledger changes hands",
+  },
+  {
+    ordinal: 6,
+    size: "ews",
+    subjects: ["Mara", "Lyra"],
+    axis_side: "neutral",
+    lens_mm: 18,
+    camera_height: "overhead",
+    movement: "crane",
+    eyeline: "none",
+    covers_lines: [8],
+    intent: "Crane out: the mill above them, and the watchers on the ridge",
+  },
+];
+
+const VISUAL_SPANS_2: Record<number, [number, number]> = {
+  1: [0, 7000],
+  2: [7000, 6000],
+  3: [13000, 3000],
+  4: [16000, 6500],
+  5: [22500, 7500],
+  6: [30000, 6000],
+};
+
+const DIALOGUE_SPECS_2: DialogueSpec[] = [
+  { line: 1, shot: 1, character: "NARRATOR", emotion: "calm", text: "The stair gave under her boots, one rotten tread at a time." },
+  { line: 2, shot: 2, character: "MARA", emotion: "serious", text: "Wrong lock. Wrong key. Wrong everything." },
+  { line: 3, shot: 2, character: "MARA", emotion: "urgent", text: "Voss, you liar." },
+  { line: 4, shot: 3, character: "NARRATOR", emotion: "surprised", text: "And still the brass turned, sweet as a promise." },
+  { line: 5, shot: 4, character: "LYRA", emotion: "whispering", text: "You took your time." },
+  { line: 6, shot: 4, character: "LYRA", emotion: "afraid", text: "They've been down here twice tonight." },
+  { line: 7, shot: 5, character: "MARA", emotion: "calm", text: "Then we don't stay for a third." },
+  { line: 8, shot: 6, character: "NARRATOR", emotion: "serious", text: "Above the mill, on the ridge line, three lanterns turned toward the water." },
+];
+
+const MOCK_TIMELINE_2: TimelineData = {
+  projectId: MOCK_PROJECT_ID,
+  sceneOrdinal: 2,
+  timingSource: "estimated" as const,
+  sceneTitle: MOCK_SCENE_2_TITLE,
+  durationMs: 36000,
+  scenes: [
+    { startMs: 0, label: "Descent" },
+    { startMs: 13000, label: "The Vault" },
+    { startMs: 22500, label: "Hand-off" },
+  ],
+  lanes: {
+    visual: buildVisual(MOCK_SHOTS_2, VISUAL_SPANS_2),
+    dialogue: buildDialogue(DIALOGUE_SPECS_2, VISUAL_SPANS_2),
+    ambience: [
+      { id: "amb-cellar", tag: "cellar drip", startMs: 0, durationMs: 36000 },
+      { id: "amb-river", tag: "mill race, muffled", startMs: 0, durationMs: 30000 },
+      { id: "amb-wind", tag: "wind, exterior", startMs: 30000, durationMs: 6000 },
+    ],
+    sfx: [
+      { id: "sfx-stair", atMs: 900, name: "stair creak" },
+      { id: "sfx-tumbler", atMs: 9400, name: "tumblers" },
+      { id: "sfx-vault", atMs: 14200, name: "vault gives" },
+      { id: "sfx-step", atMs: 16400, name: "step behind" },
+      { id: "sfx-ledger", atMs: 25000, name: "ledger slaps shut" },
+    ],
+  },
+};
+
+// --------------------------------------------------------------------------- //
+// The project's scenes, as the workspace's scene rail reads them.
+// --------------------------------------------------------------------------- //
+
+/** One authored scene of the fixture project: everything `getScene` and
+ * `getTimeline` return for it, keyed by the ordinal in the scene reference. */
+export interface MockSceneFixture {
+  ordinal: number;
+  title: string;
+  grammarProfile: GrammarProfile;
+  subjects: string[];
+  shots: ShotSpec[];
+  findings: Finding[];
+  timeline: TimelineData;
+}
+
+export const MOCK_SCENE_FIXTURES: MockSceneFixture[] = [
+  {
+    ordinal: 1,
+    title: MOCK_SCENE_TITLE,
+    grammarProfile: MOCK_GRAMMAR_PROFILE,
+    subjects: MOCK_SUBJECTS,
+    shots: MOCK_SHOTS,
+    findings: MOCK_SERVER_FINDINGS,
+    timeline: MOCK_TIMELINE,
+  },
+  {
+    ordinal: 2,
+    title: MOCK_SCENE_2_TITLE,
+    grammarProfile: MOCK_GRAMMAR_PROFILE,
+    subjects: ["Mara", "Lyra"],
+    shots: MOCK_SHOTS_2,
+    findings: [],
+    timeline: MOCK_TIMELINE_2,
+  },
+];

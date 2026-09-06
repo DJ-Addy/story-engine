@@ -10,11 +10,19 @@
 //    back explicitly and names the endpoint it is waiting for — it never
 //    invents a URL. Every such spot is tagged `GAP:`.
 
-import type { CastingData, SceneData, StoryEngineApi } from "@/lib/api";
+import type {
+  CastingData,
+  SceneData,
+  SceneSummary,
+  StoryEngineApi,
+} from "@/lib/api";
 import type {
   AmbienceBlock,
   AnimaticJudgment,
+  AssistProposal,
+  AssistRequest,
   DialogueClip,
+  EditsApplied,
   Emotion,
   Eyeline,
   Finding,
@@ -27,6 +35,7 @@ import type {
   ShotSpec,
   ShotVideo,
   TimelineData,
+  TimelineEditOp,
   VideoRenderRequest,
   VideoRenderResult,
   VisualClip,
@@ -38,6 +47,7 @@ import type {
 import { EMOTIONS, SHOT_SIZES } from "@/lib/types";
 import type { CharacterSignal } from "@/lib/judge";
 import { MOCK_VOICE_POOL } from "@/lib/mock";
+import { splitSceneRef } from "@/lib/sceneRef";
 import {
   API_BASE_URL,
   ApiError,
@@ -166,20 +176,16 @@ interface SceneRef {
 }
 
 /**
- * Resolve a UI scene/project id to the (project, scene ordinal) pair every
- * scene endpoint needs. Accepted forms: "proj_1/4", "proj_1:4", or a bare
- * "proj_1".
+ * Resolve a UI scene reference to the (project, scene ordinal) pair every scene
+ * endpoint needs.
  *
- * A bare id means scene 1: `normalize.py` numbers scenes 1-based and reserves
- * ordinal 0 for the pre-slugline preamble, so scene 1 is always the first real
- * scene — which is the only one the demo pages open.
+ * The splitting rule itself lives in `lib/sceneRef.ts`, because the mock serves
+ * more than one scene now and has to read a reference exactly the way this
+ * client does. All that is left here is the demo-project indirection.
  */
 function parseSceneRef(ref: string): SceneRef {
-  const match = /^(.*?)[/:](\d+)$/.exec(ref);
-  if (match) {
-    return { projectId: resolveProjectId(match[1]), ordinal: Number(match[2]) };
-  }
-  return { projectId: resolveProjectId(ref), ordinal: 1 };
+  const { projectRef, ordinal } = splitSceneRef(ref);
+  return { projectId: resolveProjectId(projectRef), ordinal };
 }
 
 // --------------------------------------------------------------------------- //
@@ -517,6 +523,25 @@ export class HttpApi implements StoryEngineApi {
    * of paying a second round trip on every validate. */
   private readonly actionAxis = new Map<string, string>();
 
+  /** GET /projects/{id}/graph, read for its scene list alone. The graph is the
+   * only endpoint that knows how many scenes a project has; ordinal 0 is the
+   * pre-slugline preamble (`normalize.py`) and is not a scene anyone edits, so
+   * it is dropped here rather than shown as an empty first row. */
+  async listScenes(sceneRef: string): Promise<SceneSummary[]> {
+    const { projectId } = parseSceneRef(sceneRef);
+    const graph = await request<StoryGraphWire>(
+      `/projects/${encodeURIComponent(projectId)}/graph`,
+    );
+    return graph.scenes
+      .filter((s) => s.ordinal >= 1)
+      .sort((a, b) => a.ordinal - b.ordinal)
+      .map((s) => ({
+        ordinal: s.ordinal,
+        title: sceneTitle(s),
+        lineCount: s.lines.length,
+      }));
+  }
+
   async getScene(sceneId: string): Promise<SceneData> {
     const { projectId, ordinal } = parseSceneRef(sceneId);
     const [project, graph, shotlist] = await Promise.all([
@@ -749,5 +774,53 @@ export class HttpApi implements StoryEngineApi {
       { method: "POST", body: req },
     );
     return toVideoRenderResult(wire);
+  }
+
+  // --- Edit assistant ---------------------------------------------------- //
+
+  /**
+   * POST .../scenes/{ordinal}/assist.
+   *
+   * The response passes through unmapped: `AssistProposal` mirrors the backend
+   * model field for field, and the op batch inside it has to survive the round
+   * trip byte-identical — it is sent straight back to the edits endpoint below.
+   * Mapping it would be an opportunity to lose a field.
+   *
+   * Failures arrive as `ApiError` carrying the server's own `detail`: 402 from
+   * the cost governor, 403 from the rights gate, and 503 naming
+   * GOOGLE_CLOUD_PROJECT / GOOGLE_APPLICATION_CREDENTIALS when the deployment
+   * has no LLM. The panel shows that wording verbatim rather than inventing
+   * its own, because the server's version tells the reader what to go and do.
+   */
+  async assist(
+    projectId: string,
+    sceneOrdinal: number,
+    req: AssistRequest,
+  ): Promise<AssistProposal> {
+    const pid = resolveProjectId(projectId);
+    return request<AssistProposal>(
+      `/projects/${encodeURIComponent(pid)}/scenes/${sceneOrdinal}/assist`,
+      { method: "POST", body: req },
+    );
+  }
+
+  /** POST .../scenes/{ordinal}/timeline/edits. All-or-nothing: a 422 names the
+   * op that failed and nothing was written. The response is the whole scene
+   * timeline; only the staleness verdict is kept, because the shell refetches
+   * the scene itself once this resolves. */
+  async applyTimelineEdits(
+    projectId: string,
+    sceneOrdinal: number,
+    edits: TimelineEditOp[],
+  ): Promise<EditsApplied> {
+    const pid = resolveProjectId(projectId);
+    const wire = await request<SceneTimelineWire>(
+      `/projects/${encodeURIComponent(pid)}/scenes/${sceneOrdinal}/timeline/edits`,
+      { method: "POST", body: { edits } },
+    );
+    return {
+      stale: wire.stale === true,
+      staleReasons: [...(wire.stale_reasons ?? [])],
+    };
   }
 }

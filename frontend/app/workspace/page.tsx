@@ -5,12 +5,13 @@ import Workspace from "@/components/workspace/Workspace";
 export const metadata: Metadata = {
   title: "Workspace · Story Engine",
   description:
-    "Shot list, program monitor and timeline for one scene, on one screen.",
+    "One scene, two views: the screenplay with its shots in the margin, and the "
+    + "program monitor with the cut under it. The assistant edits the story graph.",
 };
 
 export default function WorkspacePage() {
-  // The workspace reads ?scene= with useSearchParams, so it renders on the
-  // client below a Suspense boundary rather than blocking the prerender.
+  // The workspace reads ?scene= and ?view= with useSearchParams, so it renders
+  // on the client below a Suspense boundary rather than blocking the prerender.
   return (
     <Suspense fallback={<div className="tl-shell h-dvh" aria-busy />}>
       <Workspace />

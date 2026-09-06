@@ -34,7 +34,12 @@ export default function AppNav({
 
   return (
     <header className="sticky top-0 z-40 shrink-0 border-b border-[var(--hairline)] bg-[var(--cast-bg)]/85 backdrop-blur-md">
-      <div className={`mx-auto flex w-full items-center gap-2 px-4 py-2 sm:px-6 ${width}`}>
+      {/* 54px, fixed: the workspace switches its whole middle column under this
+          bar, and a bar that changed height with its contents would make that
+          read as a page change. */}
+      <div
+        className={`mx-auto flex min-h-[54px] w-full items-center gap-2 px-4 py-2 sm:px-6 ${width}`}
+      >
         <Link
           href="/"
           className={`shrink-0 rounded-sm text-xs font-semibold tracking-wide text-zinc-200 transition-colors hover:text-zinc-50 ${FOCUS_RING}`}

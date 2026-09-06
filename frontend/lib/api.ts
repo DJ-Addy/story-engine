@@ -9,6 +9,9 @@
 import { HttpApi } from "@/lib/httpApi";
 import type {
   AnimaticJudgment,
+  AssistProposal,
+  AssistRequest,
+  EditsApplied,
   Finding,
   GrammarProfile,
   JudgeEngine,
@@ -16,6 +19,7 @@ import type {
   ShotSpec,
   ShotVideo,
   TimelineData,
+  TimelineEditOp,
   VideoRenderRequest,
   VideoRenderResult,
   Voice,
@@ -25,6 +29,7 @@ import type {
 } from "@/lib/types";
 import type { CharacterSignal } from "@/lib/judge";
 import { judgeCasting } from "@/lib/judge";
+import type { MockSceneFixture } from "@/lib/mock";
 import {
   castingFromIds,
   MOCK_ANIMATIC_JUDGMENT,
@@ -32,16 +37,12 @@ import {
   MOCK_CASTING_TITLE,
   MOCK_CHARACTER_SIGNALS,
   MOCK_DEFAULT_CASTING,
-  MOCK_GRAMMAR_PROFILE,
   MOCK_PROJECT_ID,
+  MOCK_SCENE_FIXTURES,
   MOCK_SCENE_ID,
-  MOCK_SCENE_TITLE,
-  MOCK_SERVER_FINDINGS,
-  MOCK_SHOTS,
-  MOCK_SUBJECTS,
-  MOCK_TIMELINE,
   MOCK_VOICE_POOL,
 } from "@/lib/mock";
+import { splitSceneRef } from "@/lib/sceneRef";
 
 export interface SceneData {
   id: string;
@@ -50,6 +51,21 @@ export interface SceneData {
   subjects: string[];
   shots: ShotSpec[];
   findings: Finding[];
+}
+
+/**
+ * One row of the workspace's scene rail.
+ *
+ * The rail is what makes the workspace a workspace rather than a single-scene
+ * page, so it needs the project's scenes BEFORE any one of them is opened. The
+ * count is lines rather than shots on purpose: the story graph knows how many
+ * lines a scene has in the one request that lists the scenes, whereas shot
+ * counts would cost a shot-list fetch per scene to state honestly.
+ */
+export interface SceneSummary {
+  ordinal: number;
+  title: string;
+  lineCount: number;
 }
 
 /** Everything the Casting Studio needs to open, in one payload (mirrors how
@@ -78,6 +94,10 @@ export interface StoryEngineApi {
    * engine answers a request end to end, and the UI stamps every score. */
   readonly judgeEngine: JudgeEngine;
 
+  /** The scenes of the project a reference points at, for the scene rail. The
+   * reference is the same opaque string `getScene` takes; its scene half is
+   * ignored, because the answer is a property of the project. */
+  listScenes(sceneRef: string): Promise<SceneSummary[]>;
   getScene(sceneId: string): Promise<SceneData>;
   /** Persist shots and return the server's authoritative findings. */
   validateScene(sceneId: string, shots: ShotSpec[]): Promise<Finding[]>;
@@ -126,19 +146,65 @@ export interface StoryEngineApi {
     projectId: string,
     req: VideoRenderRequest,
   ): Promise<VideoRenderResult>;
+
+  // --- Edit assistant ---------------------------------------------------- //
+  /** Ask the assistant about one scene. Answers with prose plus a batch of ops
+   * already validated against that scene, so Apply is a batch that will land.
+   * Spends provider credits: 402 when the cost governor refuses and 503 when no
+   * LLM is configured — the 503's detail names the variables to set.
+   * Real: POST /api/v1/projects/{id}/scenes/{ordinal}/assist */
+  assist(
+    projectId: string,
+    sceneOrdinal: number,
+    req: AssistRequest,
+  ): Promise<AssistProposal>;
+
+  /** Apply a batch of ops to the scene's IR — all-or-nothing, so a 422 means
+   * nothing changed. This is the same endpoint the timeline editor uses; the
+   * assistant proposes, this applies.
+   * Real: POST /api/v1/projects/{id}/scenes/{ordinal}/timeline/edits */
+  applyTimelineEdits(
+    projectId: string,
+    sceneOrdinal: number,
+    edits: TimelineEditOp[],
+  ): Promise<EditsApplied>;
 }
 
 class MockApi implements StoryEngineApi {
   readonly judgeEngine: JudgeEngine = "local-heuristic";
 
+  /** The fixture behind a scene reference, or a refusal in the same shape the
+   * live API gives: a scene that was never authored is not silently replaced
+   * with the first one, because the rail would then lie about what it opened. */
+  private fixture(sceneRef: string): MockSceneFixture {
+    const { ordinal } = splitSceneRef(sceneRef || MOCK_SCENE_ID);
+    const found = MOCK_SCENE_FIXTURES.find((f) => f.ordinal === ordinal);
+    if (!found) {
+      throw new Error(
+        `Scene ${ordinal} is not authored in the fixture project. ` +
+          `Mock mode ships scenes ${MOCK_SCENE_FIXTURES.map((f) => f.ordinal).join(", ")}.`,
+      );
+    }
+    return found;
+  }
+
+  async listScenes(): Promise<SceneSummary[]> {
+    return MOCK_SCENE_FIXTURES.map((f) => ({
+      ordinal: f.ordinal,
+      title: f.title,
+      lineCount: f.timeline.lanes.dialogue.length,
+    }));
+  }
+
   async getScene(sceneId: string): Promise<SceneData> {
+    const f = this.fixture(sceneId);
     return {
       id: sceneId || MOCK_SCENE_ID,
-      title: MOCK_SCENE_TITLE,
-      grammar_profile: MOCK_GRAMMAR_PROFILE,
-      subjects: [...MOCK_SUBJECTS],
-      shots: MOCK_SHOTS.map((s) => ({ ...s, subjects: [...s.subjects], covers_lines: [...s.covers_lines] })),
-      findings: MOCK_SERVER_FINDINGS.map((f) => ({ ...f })),
+      title: f.title,
+      grammar_profile: f.grammarProfile,
+      subjects: [...f.subjects],
+      shots: f.shots.map((s) => ({ ...s, subjects: [...s.subjects], covers_lines: [...s.covers_lines] })),
+      findings: f.findings.map((x) => ({ ...x })),
     };
   }
 
@@ -232,8 +298,8 @@ class MockApi implements StoryEngineApi {
   async getTimeline(projectId: string): Promise<TimelineData> {
     // Real: GET .../scenes/{ordinal}/timeline joined with the scene's shot list.
     // Here it's served from a fixture, deep-cloned so the timeline store's edits
-    // never touch MOCK_TIMELINE.
-    const t = MOCK_TIMELINE;
+    // never touch the fixture itself.
+    const t = this.fixture(projectId).timeline;
     return {
       projectId: projectId || t.projectId,
       sceneOrdinal: t.sceneOrdinal,
@@ -269,6 +335,33 @@ class MockApi implements StoryEngineApi {
       `Mock mode has no video provider, so shot ${req.shot_ordinal} cannot be ` +
         "rendered. Point the app at a live backend (NEXT_PUBLIC_USE_MOCK_API=false) " +
         "to render with Veo.",
+    );
+  }
+
+  // --- Edit assistant ---------------------------------------------------- //
+
+  /**
+   * The mock has no model, so it says so. It must NEVER answer with a canned
+   * reply and a hand-written op batch: a viewer who cannot tell a fixture from
+   * an agent would be looking at a fabricated demo of the one feature whose
+   * whole claim is that a real model proposed a real edit. The panel checks
+   * `API_MODE` and shows the unconfigured state rather than calling this, so
+   * reaching here at all is a bug — hence a plain, loud refusal.
+   */
+  async assist(): Promise<AssistProposal> {
+    throw new Error(
+      "Mock mode has no LLM, so the edit assistant is unavailable. Point the " +
+        "app at a live backend (NEXT_PUBLIC_USE_MOCK_API=false) with " +
+        "GOOGLE_CLOUD_PROJECT and GOOGLE_APPLICATION_CREDENTIALS configured.",
+    );
+  }
+
+  /** Nothing can be proposed in mock mode, so nothing can be applied; the
+   * store's local AI-assist strip is the mock's editing affordance. */
+  async applyTimelineEdits(): Promise<EditsApplied> {
+    throw new Error(
+      "Mock mode holds the timeline in the browser, so IR edits cannot be " +
+        "applied. Point the app at a live backend to edit the story graph.",
     );
   }
 }

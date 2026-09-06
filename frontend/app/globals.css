@@ -371,7 +371,7 @@ body {
 }
 
 /* ===================================================================== */
-/* Workspace (one route: monitor + shot list + docked timeline)          */
+/* Workspace (one shell, two views: script and edit)                     */
 /* ===================================================================== */
 
 /**
@@ -384,6 +384,10 @@ body {
  * exactly chrome + stage and lands flush with the bottom of the row. When the
  * column is narrower than that (a tall, narrow window) `max-width` wins and the
  * panel is simply shorter than the row.
+ *
+ * There is no stacked fallback any more. The shell is one non-scrolling
+ * viewport at every width, so a narrow window gives the monitor a smaller
+ * picture rather than a taller page.
  */
 .ws-monitor-fit {
   /* Measured: the monitor's header is 45px and its footer 38-55px depending on
@@ -398,21 +402,109 @@ body {
   margin-inline: auto;
 }
 
-/* The drag handle that resizes the docked timeline. */
-.ws-dock-grip {
-  background: var(--hairline-strong);
-  transition: background-color 0.15s ease;
+/* ---------------------------------------------------------------------- */
+/* Filmstrip                                                              */
+/*                                                                        */
+/* A card is 96px wide and fixed: the strip has to read as an even run of  */
+/* shots along time, which it stops doing the moment cards size to their   */
+/* content. Three states, told apart by border alone so nothing jumps —    */
+/* resting, ACTIVE (the shot under the playhead) and LINKED (the shot the  */
+/* pointer is over somewhere else on the page).                            */
+/* ---------------------------------------------------------------------- */
+.ws-thumb {
+  width: 96px;
+  flex: none;
+  display: flex;
+  flex-direction: column;
+  border-radius: 8px;
+  border: 1px solid var(--hairline);
+  background: var(--surface-2);
+  overflow: hidden;
+  text-align: left;
+  transition: border-color 0.18s ease, background-color 0.18s ease;
 }
-.ws-dock-resizer:hover .ws-dock-grip,
-.ws-dock-resizer:focus-visible .ws-dock-grip {
-  background: rgb(var(--tl-playhead) / 0.75);
+.ws-thumb:not(.ws-thumb-active):not(.ws-thumb-linked):hover {
+  border-color: var(--hairline-strong);
+}
+.ws-thumb-board {
+  position: relative;
+  height: 44px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  color: rgb(161 161 170);
+  background: rgb(var(--tl-visual) / 0.07);
+}
+.ws-thumb.ws-thumb-linked {
+  border-color: rgb(var(--tl-visual) / 0.55);
+}
+.ws-thumb.ws-thumb-active {
+  border-color: rgb(var(--tl-playhead) / 0.35);
+}
+.ws-thumb.ws-thumb-active .ws-thumb-board {
+  background: rgb(var(--tl-playhead) / 0.09);
+  color: rgb(var(--tl-playhead));
 }
 
-@media (max-width: 1023px) {
-  /* Stacked layout: the monitor is width-led again and the region scrolls. */
-  .ws-monitor-fit {
-    height: auto;
-    aspect-ratio: auto;
-    width: 100%;
+/* ---------------------------------------------------------------------- */
+/* The dock's two summary lanes                                           */
+/*                                                                        */
+/* Fit-to-width, so every position here is a percentage of the scene and   */
+/* set inline. The colours live in CSS rather than in utility classes      */
+/* because they are built from the --tl-* / --emotion-* triples, the same  */
+/* way .tl-clip is.                                                        */
+/* ---------------------------------------------------------------------- */
+.ws-lane {
+  position: relative;
+  flex: 1 1 0%;
+  min-width: 0;
+  height: 26px;
+  border-radius: 6px;
+  background: var(--surface-2);
+  overflow: hidden;
+  cursor: pointer;
+  touch-action: none;
+}
+.ws-lane-shot {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  background: rgb(var(--tl-visual) / 0.16);
+  border-right: 1px solid var(--hairline);
+  transition: background-color 0.18s ease, box-shadow 0.18s ease;
+}
+.ws-lane-shot:not(.ws-lane-shot-on):hover {
+  background: rgb(var(--tl-visual) / 0.28);
+}
+.ws-lane-shot.ws-lane-shot-on {
+  background: rgb(var(--tl-playhead) / 0.24);
+  box-shadow: inset 0 0 0 1px rgb(var(--tl-playhead) / 0.4);
+}
+.ws-lane-bed {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  background: rgb(var(--tl-ambience) / 0.07);
+}
+.ws-lane-line {
+  position: absolute;
+  top: 5px;
+  bottom: 5px;
+  border-radius: 3px;
+  background: rgb(var(--ec, var(--emotion-neutral)) / 0.3);
+  transition: background-color 0.18s ease;
+}
+.ws-lane-line:hover {
+  background: rgb(var(--ec, var(--emotion-neutral)) / 0.55);
+}
+.ws-lane-line.ws-lane-line-selected {
+  box-shadow: 0 0 0 1px rgb(var(--ec, var(--emotion-neutral)) / 0.9);
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .ws-thumb,
+  .ws-lane-shot,
+  .ws-lane-line {
+    transition: none;
   }
 }

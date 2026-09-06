@@ -400,3 +400,95 @@ export type ShotVideoStatus =
   | "rendering" // POST in flight
   | "ready" // a render exists (playable, or a provider reference)
   | "error"; // the lookup or the render failed — `error` says why
+
+// --------------------------------------------------------------------------- //
+// Edit assistant (backend/app/render/assist.py + app/render/timeline_edits.py).
+//
+//   POST /api/v1/projects/{id}/scenes/{ordinal}/assist        -> AssistProposal
+//   POST /api/v1/projects/{id}/scenes/{ordinal}/timeline/edits -> SceneTimeline
+//
+// The op union below is the SAME closed vocabulary the edits endpoint accepts,
+// mirrored here so the panel is type-safe about what it sends back. It never
+// needs to interpret one: the server writes a human `summary` per op precisely
+// so the vocabulary is not defined a second time in TypeScript.
+// --------------------------------------------------------------------------- //
+
+/** A shot to insert. Mirrors backend `NewShot`: `ShotSpec` minus the ordinal,
+ * with the mechanical camera fields optional (the server defaults them to a
+ * neutral setup and the continuity validator re-runs afterwards). */
+export interface NewShotSpec {
+  size: ShotSize;
+  subjects: string[];
+  covers_lines: number[];
+  intent: string;
+  axis_side?: AxisSide;
+  lens_mm?: number;
+  camera_height?: CameraHeight;
+  /** Backend vocabulary — narrower than the frontend `Movement`/`Eyeline`. */
+  movement?: "static" | "pan" | "tilt" | "dolly" | "handheld" | "crane";
+  eyeline?: "left" | "right" | "to_camera" | "none";
+}
+
+/** One op the timeline editor accepts. Six, and only six. */
+export type TimelineEditOp =
+  | {
+      op: "reassign_line_character";
+      line_ordinal: number;
+      character_name: string | null;
+      allow_new?: boolean;
+    }
+  | { op: "set_line_emotion"; line_ordinal: number; emotion: string | null }
+  | { op: "set_scene_pacing"; pacing: number }
+  | { op: "set_ambience_duck"; depth: number }
+  | { op: "insert_shot"; after_ordinal: number | null; shot: NewShotSpec }
+  | { op: "set_shot_coverage"; shot_ordinal: number; covers_lines: number[] };
+
+/** One proposed op plus the server's wording for it. */
+export interface ProposedEdit {
+  edit: TimelineEditOp;
+  summary: string;
+}
+
+/** One turn of the conversation. The assistant is stateless, so the panel
+ * carries the history and sends it back with each message. */
+export interface AssistTurn {
+  role: "user" | "assistant";
+  content: string;
+}
+
+/** Body for POST .../assist. */
+export interface AssistRequest {
+  message: string;
+  history: AssistTurn[];
+}
+
+/**
+ * The assistant's answer: prose plus a batch that is already validated against
+ * this scene's real state, so Apply is a batch that will land.
+ *
+ * `undo` is the inverse batch, already ordered for replay, and is empty exactly
+ * when `undo_blocked_by` says why there isn't one (inserting a shot has no
+ * inverse op). `dropped` names the ops the model produced that were refused —
+ * shown, not swallowed. `estimated_cost_cents` is the cost governor's pre-flight
+ * number, which is what the project was charged; it is never a measurement of
+ * what the provider billed.
+ */
+export interface AssistProposal {
+  reply: string;
+  edits: ProposedEdit[];
+  undo: TimelineEditOp[];
+  undo_summary: string[];
+  undo_blocked_by: string | null;
+  dropped: string[];
+  provider: string;
+  model: string;
+  estimated_cost_cents: number;
+}
+
+/** What POST .../timeline/edits reports back about the render it invalidated.
+ * An edit changes the IR, never the WAV, so a scene with audio comes back
+ * stale until it is rendered again. */
+export interface EditsApplied {
+  stale: boolean;
+  staleReasons: string[];
+}

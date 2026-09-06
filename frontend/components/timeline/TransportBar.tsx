@@ -31,7 +31,7 @@ function ClockReadout() {
  * is the failure worth guarding against — the lanes are real, the durations are
  * a reading-speed heuristic, and everything shifts once audio is rendered.
  */
-function TimingSourceChip() {
+export function TimingSourceChip() {
   const timingSource = useTimelineStore((s) => s.data?.timingSource ?? null);
   if (timingSource !== "estimated") return null;
   return (

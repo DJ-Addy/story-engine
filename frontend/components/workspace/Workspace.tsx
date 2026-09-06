@@ -1,41 +1,54 @@
 "use client";
 
-// THE workspace: one route where a scene is edited.
+// THE workspace: ONE SHELL, TWO VIEWS.
 //
 // Before this, /scenes/demo drove `useSceneStore` and /timeline drove
 // `useTimelineStore`, each fetching its own thing, with no shared notion of the
-// scene being worked on. Here a single scene reference loads BOTH, and the two
-// selections are mirrored (see useSceneTimelineSync), so the shot list, the
-// program monitor and the lanes are three views of one thing.
+// scene being worked on. Then both landed on one route — and that route grew
+// six regions and a four-tab panel, which is the version that got called "way
+// too cluttered to use for anyone". This is the answer to that.
 //
-// Layout, top to bottom: app nav, scene bar, then the edit bay — program
-// monitor beside the shot list and its panels — and the timeline docked at the
-// bottom. The page itself NEVER scrolls: it is exactly one viewport tall and
-// every region that can overflow scrolls inside itself.
+// The frame never moves. The top bar, the scene rail on the left and the
+// assistant on the right are the same in both views; only the middle column is
+// swapped, so throwing the Script/Edit switch never feels like changing pages.
+// Read the scene as a screenplay, or cut it as picture — one scene reference
+// loads both halves and one selection is mirrored across them (see
+// useSceneTimelineSync), so the script, the filmstrip, the monitor and the
+// lanes are four views of one graph rather than four fetches.
+//
+// The page itself NEVER scrolls: it is exactly one viewport tall and every
+// region that can overflow scrolls inside itself.
 
 import { useCallback, useEffect, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
-import { api, type SceneData } from "@/lib/api";
+import { api, type SceneData, type SceneSummary } from "@/lib/api";
 import type { TimelineData } from "@/lib/types";
+import { splitSceneRef } from "@/lib/sceneRef";
 import { useSceneStore } from "@/lib/store";
 import { useTimelineStore } from "@/lib/timelineStore";
 import AppNav from "@/components/AppNav";
 import ApiModeBadge from "@/components/ApiModeBadge";
-import ShotListEditor from "@/components/ShotListEditor";
-import VideoMonitor from "@/components/timeline/VideoMonitor";
+import AssistantPanel from "@/components/assistant/AssistantPanel";
 import { useTimelineAudio } from "@/components/timeline/useTimelineAudio";
 import { useTransportClock } from "@/components/timeline/useTransportClock";
-import { FailurePanel } from "@/components/casting/JudgeStatus";
-import SceneBar from "@/components/workspace/SceneBar";
-import SidePanel, { type SidePanelTab } from "@/components/workspace/SidePanel";
-import TimelineDock from "@/components/workspace/TimelineDock";
+import EditView from "@/components/workspace/EditView";
+import SceneRail from "@/components/workspace/SceneRail";
+import ScriptView from "@/components/workspace/ScriptView";
+import ViewSwitch, {
+  VIEW_PANEL_ID,
+  viewTabId,
+  type WorkspaceView,
+} from "@/components/workspace/ViewSwitch";
 import { useSceneTimelineSync } from "@/components/workspace/useSceneTimelineSync";
 
 /** No projects endpoint exists yet, so the workspace opens on the demo scene
- * unless ?scene= says otherwise. Both api.getScene and api.getTimeline accept
- * the same reference ("demo", "proj_1/4"), which is what lets one control open
- * both halves. */
+ * unless ?scene= says otherwise. `api.getScene`, `api.getTimeline` and
+ * `api.listScenes` all accept the same reference ("demo", "proj_1/4"), which is
+ * what lets one control open every part of this page. */
 const DEFAULT_SCENE_REF = "demo";
+
+/** Edit is the default view: a reviewer arriving cold should meet the picture. */
+const DEFAULT_VIEW: WorkspaceView = "edit";
 
 type Fetched<T> = { key: string; data: T } | null;
 type Failed = { key: string; error: unknown } | null;
@@ -44,8 +57,13 @@ export default function Workspace() {
   const router = useRouter();
   const params = useSearchParams();
   const sceneRef = (params.get("scene") ?? "").trim() || DEFAULT_SCENE_REF;
+  const view: WorkspaceView =
+    params.get("view") === "script" ? "script" : DEFAULT_VIEW;
 
-  // Bumped by Retry; part of the load key so a retry re-runs the effect.
+  const { projectRef, ordinal } = splitSceneRef(sceneRef);
+
+  // Bumped by Retry AND by the assistant applying edits; part of the load key,
+  // so either one re-runs the effect and refetches both halves.
   const [attempt, setAttempt] = useState(0);
   const loadKey = `${sceneRef}#${attempt}`;
 
@@ -56,6 +74,7 @@ export default function Workspace() {
   const [sceneError, setSceneError] = useState<Failed>(null);
   const [timeline, setTimeline] = useState<Fetched<TimelineData>>(null);
   const [timelineError, setTimelineError] = useState<Failed>(null);
+  const [scenes, setScenes] = useState<Fetched<SceneSummary[]>>(null);
 
   // The placeholder audio engine + the virtual transport clock, mounted once
   // for the whole workspace. These stay authoritative over time; the monitor
@@ -63,13 +82,13 @@ export default function Workspace() {
   const { engineRef, activate } = useTimelineAudio();
   useTransportClock(engineRef);
 
-  // One selection across the shot list and the visual lane.
+  // One selection across the script, the filmstrip and the lanes.
   useSceneTimelineSync();
 
   // One reference, both halves. They are fetched in parallel and reported
-  // independently: against a live backend the timeline 404s ("No audio rendered
-  // yet") for a scene whose shot list loads perfectly well, and losing the shot
-  // list to that would be a lie about what is available.
+  // independently: against a live backend the shot list can be missing for a
+  // scene whose timeline plans perfectly well, and losing the timeline to that
+  // would be a lie about what is available.
   useEffect(() => {
     let cancelled = false;
     const key = loadKey;
@@ -103,59 +122,82 @@ export default function Workspace() {
     };
   }, [loadKey, sceneRef, loadScene, loadTimeline]);
 
+  // The rail is a property of the PROJECT, so it survives moving between that
+  // project's scenes and is only refetched when the project changes. A failure
+  // here is answered with an empty list rather than an alert: the rail then
+  // shows the one scene that is open, and the scene's own failure — the one
+  // that actually costs the viewer something — is the only one reported.
+  useEffect(() => {
+    let cancelled = false;
+    const key = `${projectRef}#${attempt}`;
+
+    api
+      .listScenes(projectRef)
+      .then((list) => {
+        if (!cancelled) setScenes({ key, data: list });
+      })
+      .catch(() => {
+        if (!cancelled) setScenes({ key, data: [] });
+      });
+
+    return () => {
+      cancelled = true;
+    };
+  }, [projectRef, attempt]);
+
   // Loading is DERIVED from "what has answered for the current key", so no
   // effect ever has to synchronously set state back to "loading".
   const sceneData = scene?.key === loadKey ? scene.data : null;
   const sceneFailure = sceneError?.key === loadKey ? sceneError.error : null;
-  const sceneLoading = sceneData === null && sceneFailure === null;
 
   const timelineData = timeline?.key === loadKey ? timeline.data : null;
   const timelineFailure =
     timelineError?.key === loadKey ? timelineError.error : null;
   const timelineLoading = timelineData === null && timelineFailure === null;
 
+  const sceneList =
+    scenes?.key === `${projectRef}#${attempt}` ? scenes.data : null;
+
   const retry = useCallback(() => setAttempt((n) => n + 1), []);
+
+  /** The URL that opens a given scene in a given view. Both live in the query
+   * so a view is shareable — a reviewer can be sent straight to the script. */
+  const hrefFor = useCallback((nextRef: string, nextView: WorkspaceView) => {
+    const q = new URLSearchParams();
+    if (nextRef !== DEFAULT_SCENE_REF) q.set("scene", nextRef);
+    if (nextView !== DEFAULT_VIEW) q.set("view", nextView);
+    const query = q.toString();
+    return query ? `/workspace?${query}` : "/workspace";
+  }, []);
 
   // Switching scenes empties both stores first, so nothing from the old scene
   // is on screen while the new one loads.
   const openScene = useCallback(
     (next: string) => {
+      // Compared as a split reference, not as a string: "demo" and "demo/1"
+      // name the same scene, and reloading it would be a flash for nothing.
+      const target = splitSceneRef(next);
+      if (target.projectRef === projectRef && target.ordinal === ordinal) return;
       useSceneStore.getState().loadScene([], []);
       useTimelineStore.getState().clear();
-      const query =
-        next === DEFAULT_SCENE_REF ? "" : `?scene=${encodeURIComponent(next)}`;
-      router.replace(`/workspace${query}`);
+      router.replace(hrefFor(next, view), { scroll: false });
     },
-    [router],
+    [router, hrefFor, projectRef, ordinal, view],
   );
 
-  // Hover is shared: pointing at a shot row rings its clip on the visual lane,
-  // and pointing at a clip lights up its row.
-  const hoveredOrdinal = useSceneStore((s) => s.hoveredOrdinal);
-  const hoverShot = useSceneStore((s) => s.hoverShot);
-
-  const shotCount = useSceneStore((s) => s.shots.length);
-  const findingCount = useSceneStore(
-    (s) => s.findings.filter((f) => !f.deliberate).length,
+  // Switching views refetches nothing: the load key does not contain the view,
+  // and both views read the stores that are already loaded.
+  const setView = useCallback(
+    (next: WorkspaceView) => {
+      if (next === view) return;
+      router.replace(hrefFor(sceneRef, next), { scroll: false });
+    },
+    [router, hrefFor, sceneRef, view],
   );
-
-  const [tab, setTab] = useState<SidePanelTab>("continuity");
-
-  // A dialogue line, an ambience bed or an SFX cue has nowhere else to be read,
-  // so selecting one brings the inspector forward. A visual clip does not: it
-  // is already spelled out in the shot list and the monitor. Adjusted during
-  // render (the documented pattern for reacting to a changed value) rather than
-  // in an effect, which would render the old tab first and then swap it.
-  const selection = useTimelineStore((s) => s.selection);
-  const [lastSelection, setLastSelection] = useState(selection);
-  if (selection !== lastSelection) {
-    setLastSelection(selection);
-    if (selection && selection.lane !== "visual") setTab("inspector");
-  }
 
   // Global transport keyboard: space = play/pause, arrows nudge. Ignored while
-  // typing in a form control, and inside any widget that owns its own arrows
-  // (the shot-list grid, the dock's resize grip).
+  // typing in a form control (the assistant's composer, the rail's reference
+  // box), and inside any widget that owns its own arrows (the view switch).
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       const t = e.target as HTMLElement | null;
@@ -187,66 +229,60 @@ export default function Workspace() {
   return (
     <div className="tl-shell flex h-dvh flex-col overflow-hidden text-zinc-200">
       <AppNav width="max-w-none">
+        <ViewSwitch value={view} onChange={setView} />
         <ApiModeBadge />
       </AppNav>
 
-      <SceneBar
-        sceneRef={sceneRef}
-        onOpen={openScene}
-        scene={sceneData}
-        timeline={timelineData}
-        loading={sceneLoading && timelineLoading}
-        shotCount={shotCount}
-        findingCount={findingCount}
-      />
+      <div className="flex min-h-0 flex-1">
+        <SceneRail
+          projectRef={projectRef}
+          activeOrdinal={timelineData?.sceneOrdinal ?? ordinal}
+          scenes={sceneList}
+          openTitle={sceneData?.title ?? timelineData?.sceneTitle ?? null}
+          onOpen={openScene}
+          sceneFailure={sceneFailure}
+          onRetry={retry}
+        />
 
-      <main className="grid min-h-0 flex-1 gap-3 overflow-y-auto px-4 pb-1 pt-3 sm:px-6 lg:grid-cols-[minmax(0,1.35fr)_minmax(360px,1fr)] lg:overflow-hidden">
-        <section
-          aria-label="Program monitor"
-          className="min-h-0 min-w-0 max-lg:min-h-[240px]"
+        <div
+          id={VIEW_PANEL_ID}
+          role="tabpanel"
+          aria-labelledby={viewTabId(view)}
+          className="flex min-h-0 min-w-0 flex-1 flex-col"
         >
-          {/* Width derived from the height this row can spare, so the 16:9
-              stage is never squashed. See .ws-monitor-fit in globals.css. */}
-          <div className="ws-monitor-fit">
-            <VideoMonitor />
-          </div>
-        </section>
+          {view === "edit" ? (
+            <EditView
+              onActivateAudio={activate}
+              loading={timelineLoading}
+              failure={timelineFailure}
+              onRetry={retry}
+            />
+          ) : (
+            <ScriptView
+              onActivateAudio={activate}
+              loading={timelineLoading}
+              failure={timelineFailure}
+              onRetry={retry}
+            />
+          )}
+        </div>
 
+        {/* The assistant is the third fixed region, not a drawer: it edits the
+            story graph, and when it applies an edit the shell — not the panel —
+            refetches the scene and the timeline it just changed. Below `lg`
+            there is no honest way to keep three columns on one non-scrolling
+            page, so it and the rail step aside rather than shrink to nothing. */}
         <aside
-          aria-label="Shot list and scene panels"
-          className="flex min-h-0 min-w-0 flex-col gap-3 lg:grid lg:grid-rows-[minmax(0,1.15fr)_minmax(0,1fr)]"
+          aria-label="Assistant"
+          className="hidden w-[336px] shrink-0 lg:block"
         >
-          <div className="min-h-0 min-w-0 max-lg:min-h-[320px]">
-            {sceneFailure !== null ? (
-              <FailurePanel
-                error={sceneFailure}
-                onRetry={retry}
-                retryLabel="Reload scene"
-                compact
-              />
-            ) : sceneLoading ? (
-              <div
-                className="cast-panel cast-shimmer h-full min-h-[160px]"
-                aria-busy
-              />
-            ) : (
-              <ShotListEditor />
-            )}
-          </div>
-          <div className="min-h-0 min-w-0 max-lg:min-h-[300px]">
-            <SidePanel tab={tab} onTab={setTab} />
-          </div>
+          <AssistantPanel
+            projectId={timelineData?.projectId ?? projectRef}
+            sceneOrdinal={timelineData?.sceneOrdinal ?? ordinal}
+            onEditsApplied={retry}
+          />
         </aside>
-      </main>
-
-      <TimelineDock
-        onActivateAudio={activate}
-        loading={timelineLoading}
-        failure={timelineFailure}
-        onRetry={retry}
-        highlightShotOrdinal={hoveredOrdinal}
-        onShotHover={hoverShot}
-      />
+      </div>
     </div>
   );
 }

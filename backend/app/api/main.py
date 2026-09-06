@@ -24,6 +24,7 @@ from app.analytics.settings import AnalyticsSettings
 from app.api.routers import (
     agent,
     analytics,
+    assist,
     auth,
     judge,
     novel,
@@ -111,6 +112,10 @@ def create_app() -> FastAPI:
     api.include_router(scripts.router)
     api.include_router(novel.router)
     api.include_router(scenes.router)
+    # Same prefix as the scene router: the assistant is the scene's editing
+    # surface, and it keeps its own module because it is the only route here
+    # that spends provider credits.
+    api.include_router(assist.router)
     api.include_router(renders.router)
     api.include_router(judge.router)
     api.include_router(analytics.router)
