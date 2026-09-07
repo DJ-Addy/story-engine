@@ -47,6 +47,17 @@ dev = [
 [tool.setuptools.packages.find]
 include = ["app*"]
 
+# The demo screenplay is runtime data, not code. `include-package-data` defaults
+# to true and would probably sweep it up anyway, but "probably" is not good
+# enough here: the Dockerfile builds the wheel from `pip install .` over a
+# context holding only pyproject.toml and `app/` (no .git, no egg-info, and
+# `backend/tests` excluded by .dockerignore), so implicit collection is running
+# on inputs nobody tests, and a file that misses the wheel simply does not exist
+# in the container. Naming it makes inclusion a stated fact.
+# tests/test_api_demo.py asserts it is readable through importlib.resources.
+[tool.setuptools.package-data]
+"app.demo" = ["*.fountain"]
+
 [tool.pytest.ini_options]
 testpaths = ["tests"]
 asyncio_mode = "auto"

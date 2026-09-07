@@ -21,11 +21,13 @@ from app.analytics.recorder import (
     shutdown_recorder,
 )
 from app.analytics.settings import AnalyticsSettings
+from app.api.deps import get_repo
 from app.api.routers import (
     agent,
     analytics,
     assist,
     auth,
+    demo,
     judge,
     novel,
     projects,
@@ -33,17 +35,19 @@ from app.api.routers import (
     scenes,
     scripts,
 )
+from app.demo import seed as demo_seed
 
 logger = logging.getLogger(__name__)
 
 
 @asynccontextmanager
 async def lifespan(app: FastAPI) -> AsyncIterator[None]:
-    """Own the ClickHouse event recorder for the life of the application.
+    """Own the ClickHouse event recorder, and make the instance worth visiting.
 
-    Built at startup rather than lazily on first use so the buffer and its drain
-    task belong to the serving event loop, and torn down at shutdown so the last
-    events are flushed and the MCP session is closed once, not per request.
+    The recorder is built at startup rather than lazily on first use so the
+    buffer and its drain task belong to the serving event loop, and torn down at
+    shutdown so the last events are flushed and the MCP session is closed once,
+    not per request.
 
     Building is cheap and offline: ``build_recorder`` reads settings and
     constructs a runner, but no MCP server is launched and no socket is opened
@@ -57,6 +61,19 @@ async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         logger.warning("analytics disabled: recorder could not be built: %s", exc)
         recorder = EventRecorder(None)
     set_recorder(recorder)
+
+    # Seed the demo project before the instance takes traffic. POST
+    # /demo/session would seed it anyway, but a cold Cloud Run instance is
+    # exactly when the first visitor arrives, and paying for the parse there
+    # makes their first click slower for no reason. Wrapped like the recorder
+    # above and for the same reason: a demo that cannot be built is a missing
+    # sample, not grounds for refusing to serve the API at all.
+    if demo_seed.demo_enabled():
+        try:
+            demo_seed.ensure_seeded(get_repo())
+        except Exception as exc:  # a missing demo must never block startup
+            logger.warning("demo project not seeded at startup: %s", exc)
+
     try:
         yield
     finally:
@@ -108,6 +125,9 @@ def create_app() -> FastAPI:
         return {"status": "ok"}
 
     api.include_router(auth.router)
+    # Unauthenticated by design; see app/api/routers/demo.py for why that is
+    # not a hole in the auth model.
+    api.include_router(demo.router)
     api.include_router(projects.router)
     api.include_router(scripts.router)
     api.include_router(novel.router)

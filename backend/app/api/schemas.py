@@ -39,6 +39,31 @@ class TokenPair(BaseModel):
     token_type: str = "bearer"
 
 
+class DemoStatus(BaseModel):
+    """What an unauthenticated client can learn about the demo project.
+
+    The defaults are exactly the disabled answer, so a deployment that has
+    turned the demo off replies with ``DemoStatus()`` and cannot accidentally
+    leak a project id through a half-filled response.
+    """
+
+    enabled: bool = False
+    seeded: bool = False
+    project_id: str | None = None
+    title: str | None = None
+    scene_count: int = 0
+
+
+class DemoSession(TokenPair):
+    """A token for the demo user, plus the project it is worth using on.
+
+    Extends ``TokenPair`` so the demo door hands back the same token shape
+    ``/auth/login`` does — a client can store it with the same code.
+    """
+
+    project_id: str
+
+
 class ProjectCreate(BaseModel):
     title: str = Field(min_length=1)
     grammar_profile: GrammarProfile = "classical"
