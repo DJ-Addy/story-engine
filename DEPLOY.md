@@ -133,11 +133,47 @@ URL=$(gcloud run services describe story-engine --region us-central1 \
 curl -s "$URL/api/v1/health"
 # Shows the agent network and whether the ADK and credentials resolved.
 curl -s "$URL/api/v1/agent/network" | head -40
+# Should report seeded:true with a project_id and a scene count.
+curl -s "$URL/api/v1/demo"
 ```
 
 `/api/v1/agent/network` is the fastest check that the deployment is genuinely
 wired: it reports `installed`, `project_configured` and `available` separately,
 so a false value tells you which half is missing.
+
+## 8. The demo project
+
+A production frontend build talks to the **live** API (see `resolveMode()` in
+`frontend/lib/api.ts`), so a deployment with an empty repository would meet a
+reviewer with a 401 or a 404 on the first click — every landing CTA points at
+`/workspace`. To prevent that the backend seeds a real project at startup, by
+running the ordinary Fountain ingest over a screenplay packaged inside the
+image, and exposes it two ways:
+
+- `GET /api/v1/demo` — what is seeded. Never writes, so polling it is free.
+- `POST /api/v1/demo/session` — mints a token and seeds on demand.
+
+That second route is anonymous by design: it exists for a visitor with no
+account. It is not a hole in the auth model, because the user behind it holds a
+random password that was hashed and discarded — `/auth/login` can never reach
+it — and owns nothing but the sample screenplay. Every other account keeps the
+same bearer check it always had.
+
+It is **on by default**, since it needs no credentials to be useful. Turn it off
+for any deployment that should not carry a sample:
+
+```bash
+gcloud run services update story-engine --region us-central1     --set-env-vars "STORY_ENGINE_DEMO=0"
+```
+
+### Do not try to configure this with `NEXT_PUBLIC_DEMO_PROJECT_ID`
+
+`NEXT_PUBLIC_*` variables are **inlined into the bundle at build time**, and
+`gcloud run deploy --source .` builds in Cloud Build long before
+`--set-env-vars` applies at runtime — so setting one on the service has no
+effect on the shipped JavaScript. The project id is discovered at runtime
+through `GET /api/v1/demo` for exactly this reason. The variable still works as
+a build-time override if you build the image yourself with it set.
 
 ## Building locally
 
