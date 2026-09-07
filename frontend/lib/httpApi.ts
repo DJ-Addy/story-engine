@@ -48,6 +48,7 @@ import { EMOTIONS, SHOT_SIZES } from "@/lib/types";
 import type { CharacterSignal } from "@/lib/judge";
 import { MOCK_VOICE_POOL } from "@/lib/mock";
 import { splitSceneRef } from "@/lib/sceneRef";
+import { isDemoRef, resolveDemoProjectId } from "@/lib/demoApi";
 import {
   API_BASE_URL,
   ApiError,
@@ -163,12 +164,23 @@ interface SceneTimelineWire {
 // Scene / project addressing
 // --------------------------------------------------------------------------- //
 
-/** The demo routes hard-code the id "demo". Point that at a real project id
- * without touching the pages by setting NEXT_PUBLIC_DEMO_PROJECT_ID. */
-const DEMO_PROJECT_ID = process.env.NEXT_PUBLIC_DEMO_PROJECT_ID ?? "";
-
-const resolveProjectId = (ref: string): string =>
-  (ref === "demo" || ref === "") && DEMO_PROJECT_ID ? DEMO_PROJECT_ID : ref;
+/**
+ * The demo routes hard-code the id "demo". Turning that into a real project id
+ * is now a RUNTIME question, asked once per page and shared by every method
+ * that needs it — see `lib/demoApi.ts` for why a build-time substitution could
+ * not work on Cloud Run.
+ *
+ * Resolution is deliberately total: when the demo cannot be discovered (no such
+ * deployment, an unseeded instance, an unreachable probe) the reference passes
+ * through untouched, which is exactly what this client did before. The request
+ * that follows then fails against /projects/demo with the server's own 401 or
+ * 404 — a failure the cold-start panel can read and act on, rather than an
+ * error invented here about a probe the caller never asked for.
+ */
+const resolveProjectId = async (ref: string): Promise<string> => {
+  if (!isDemoRef(ref)) return ref;
+  return (await resolveDemoProjectId()) ?? ref;
+};
 
 interface SceneRef {
   projectId: string;
@@ -181,11 +193,12 @@ interface SceneRef {
  *
  * The splitting rule itself lives in `lib/sceneRef.ts`, because the mock serves
  * more than one scene now and has to read a reference exactly the way this
- * client does. All that is left here is the demo-project indirection.
+ * client does. All that is left here is the demo-project indirection — which is
+ * async now, hence every caller awaits it.
  */
-function parseSceneRef(ref: string): SceneRef {
+async function parseSceneRef(ref: string): Promise<SceneRef> {
   const { projectRef, ordinal } = splitSceneRef(ref);
-  return { projectId: resolveProjectId(projectRef), ordinal };
+  return { projectId: await resolveProjectId(projectRef), ordinal };
 }
 
 // --------------------------------------------------------------------------- //
@@ -528,7 +541,7 @@ export class HttpApi implements StoryEngineApi {
    * pre-slugline preamble (`normalize.py`) and is not a scene anyone edits, so
    * it is dropped here rather than shown as an empty first row. */
   async listScenes(sceneRef: string): Promise<SceneSummary[]> {
-    const { projectId } = parseSceneRef(sceneRef);
+    const { projectId } = await parseSceneRef(sceneRef);
     const graph = await request<StoryGraphWire>(
       `/projects/${encodeURIComponent(projectId)}/graph`,
     );
@@ -543,7 +556,7 @@ export class HttpApi implements StoryEngineApi {
   }
 
   async getScene(sceneId: string): Promise<SceneData> {
-    const { projectId, ordinal } = parseSceneRef(sceneId);
+    const { projectId, ordinal } = await parseSceneRef(sceneId);
     const [project, graph, shotlist] = await Promise.all([
       request<ProjectOut>(`/projects/${encodeURIComponent(projectId)}`),
       request<StoryGraphWire>(`/projects/${encodeURIComponent(projectId)}/graph`),
@@ -575,7 +588,7 @@ export class HttpApi implements StoryEngineApi {
   }
 
   async validateScene(sceneId: string, shots: ShotSpec[]): Promise<Finding[]> {
-    const { projectId, ordinal } = parseSceneRef(sceneId);
+    const { projectId, ordinal } = await parseSceneRef(sceneId);
     const key = `${projectId}/${ordinal}`;
     let actionAxis = this.actionAxis.get(key);
     if (actionAxis === undefined) {
@@ -599,7 +612,7 @@ export class HttpApi implements StoryEngineApi {
     deliberate: boolean,
     note: string | null,
   ): Promise<void> {
-    const { projectId, ordinal } = parseSceneRef(sceneId);
+    const { projectId, ordinal } = await parseSceneRef(sceneId);
     await request<FindingWire>(
       `/projects/${encodeURIComponent(projectId)}/scenes/${ordinal}/findings/${encodeURIComponent(findingId)}`,
       { method: "PATCH", body: { deliberate, deliberate_note: note } },
@@ -609,7 +622,7 @@ export class HttpApi implements StoryEngineApi {
   // --- Casting studio ---------------------------------------------------- //
 
   async getCasting(projectId: string): Promise<CastingData> {
-    const pid = resolveProjectId(projectId);
+    const pid = await resolveProjectId(projectId);
     const [project, graph] = await Promise.all([
       request<ProjectOut>(`/projects/${encodeURIComponent(pid)}`),
       request<StoryGraphWire>(`/projects/${encodeURIComponent(pid)}/graph`),
@@ -645,7 +658,7 @@ export class HttpApi implements StoryEngineApi {
     req: VoiceFitRequest,
   ): Promise<VoiceFitResult> {
     return request<VoiceFitResult>(
-      `/projects/${encodeURIComponent(resolveProjectId(projectId))}/judge/voices`,
+      `/projects/${encodeURIComponent(await resolveProjectId(projectId))}/judge/voices`,
       { method: "POST", body: req },
     );
   }
@@ -655,14 +668,14 @@ export class HttpApi implements StoryEngineApi {
     req: VoiceRankRequest,
   ): Promise<RankingResult<VoiceFitResult>> {
     return request<RankingResult<VoiceFitResult>>(
-      `/projects/${encodeURIComponent(resolveProjectId(projectId))}/judge/rank/voices`,
+      `/projects/${encodeURIComponent(await resolveProjectId(projectId))}/judge/rank/voices`,
       { method: "POST", body: req },
     );
   }
 
   async judgeAnimatic(projectId: string): Promise<AnimaticJudgment> {
     return request<AnimaticJudgment>(
-      `/projects/${encodeURIComponent(resolveProjectId(projectId))}/judge/animatic`,
+      `/projects/${encodeURIComponent(await resolveProjectId(projectId))}/judge/animatic`,
       { method: "POST" },
     );
   }
@@ -675,7 +688,7 @@ export class HttpApi implements StoryEngineApi {
    * has run for that scene — that render spends TTS credits, so this method
    * deliberately does not trigger it. */
   async getTimeline(projectId: string): Promise<TimelineData> {
-    const { projectId: pid, ordinal } = parseSceneRef(projectId);
+    const { projectId: pid, ordinal } = await parseSceneRef(projectId);
     const [timeline, shots] = await Promise.all([
       request<SceneTimelineWire>(
         `/projects/${encodeURIComponent(pid)}/scenes/${ordinal}/timeline`,
@@ -701,7 +714,7 @@ export class HttpApi implements StoryEngineApi {
     sceneOrdinal: number,
     shotOrdinal: number,
   ): Promise<ShotVideo | null> {
-    const pid = resolveProjectId(projectId);
+    const pid = await resolveProjectId(projectId);
     const path = `/projects/${encodeURIComponent(pid)}/render/video/${sceneOrdinal}/${shotOrdinal}`;
 
     const headers: Record<string, string> = { Accept: "video/mp4, application/json" };
@@ -770,7 +783,7 @@ export class HttpApi implements StoryEngineApi {
     req: VideoRenderRequest,
   ): Promise<VideoRenderResult> {
     const wire = await request<VideoRenderOutWire>(
-      `/projects/${encodeURIComponent(resolveProjectId(projectId))}/render/video`,
+      `/projects/${encodeURIComponent(await resolveProjectId(projectId))}/render/video`,
       { method: "POST", body: req },
     );
     return toVideoRenderResult(wire);
@@ -797,7 +810,7 @@ export class HttpApi implements StoryEngineApi {
     sceneOrdinal: number,
     req: AssistRequest,
   ): Promise<AssistProposal> {
-    const pid = resolveProjectId(projectId);
+    const pid = await resolveProjectId(projectId);
     return request<AssistProposal>(
       `/projects/${encodeURIComponent(pid)}/scenes/${sceneOrdinal}/assist`,
       { method: "POST", body: req },
@@ -813,7 +826,7 @@ export class HttpApi implements StoryEngineApi {
     sceneOrdinal: number,
     edits: TimelineEditOp[],
   ): Promise<EditsApplied> {
-    const pid = resolveProjectId(projectId);
+    const pid = await resolveProjectId(projectId);
     const wire = await request<SceneTimelineWire>(
       `/projects/${encodeURIComponent(pid)}/scenes/${sceneOrdinal}/timeline/edits`,
       { method: "POST", body: { edits } },

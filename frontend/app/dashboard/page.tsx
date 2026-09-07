@@ -47,6 +47,7 @@ import {
   ErrorNotice,
   UnavailableNotice,
 } from "@/components/dashboard/states";
+import { resolveDemoProjectId } from "@/lib/demoApi";
 import { ProjectPicker } from "@/components/dashboard/ProjectPicker";
 import { StatusStrip } from "@/components/dashboard/StatusStrip";
 import { SummaryBar } from "@/components/dashboard/SummaryBar";
@@ -65,7 +66,10 @@ const DEFAULT_LIMIT = 100;
 const STORAGE_KEY = "story-engine.dashboard.project";
 
 /** Same fallback the demo routes use, so a configured deployment lands on a
- * real project with no clicking. Read as a full literal so Next inlines it. */
+ * real project with no clicking. Read as a full literal so Next inlines it —
+ * which is also why it is empty on Cloud Run, where the environment arrives at
+ * container start and the bundle froze at build time. The runtime half of this
+ * fallback is the discovery effect below; see lib/demoApi.ts. */
 const DEMO_PROJECT_ID = process.env.NEXT_PUBLIC_DEMO_PROJECT_ID ?? "";
 
 /**
@@ -146,6 +150,34 @@ export default function AnalyticsDashboardPage() {
     url.searchParams.set("project", id);
     window.history.replaceState(null, "", url.toString());
   }, []);
+
+  /** Has the runtime demo lookup answered? Until it has, "no project selected"
+   * is not yet true, and saying it would be a notice that retracts itself. */
+  const [demoProbe, setDemoProbe] = useState<"pending" | "settled">("pending");
+
+  // The DEFAULT project, when neither the URL, storage nor the build supplied
+  // one: whatever project this deployment runs its demo on. Only ever a
+  // default — a pasted ?project=, a stored choice and the picker all outrank it
+  // — and deliberately not written back to the URL or to storage, because the
+  // visitor did not choose it.
+  useEffect(() => {
+    // Nothing to look up once a project is settled on, and nothing to reset:
+    // `demoProbe` is only ever read while `projectId` is empty, so it is left
+    // alone here rather than written synchronously from an effect body.
+    if (projectId !== "") return;
+    let alive = true;
+    void resolveDemoProjectId()
+      .then((id) => {
+        if (!alive) return;
+        if (id) setChosen(id);
+      })
+      .finally(() => {
+        if (alive) setDemoProbe("settled");
+      });
+    return () => {
+      alive = false;
+    };
+  }, [projectId]);
 
   useEffect(() => {
     if (!projectId) return;
@@ -280,10 +312,16 @@ export default function AnalyticsDashboardPage() {
         </section>
 
         {!projectId ? (
-          <EmptyNotice
-            what="no project is selected, so there is nothing to query."
-            produces="choosing a project above, or setting NEXT_PUBLIC_DEMO_PROJECT_ID"
-          />
+          demoProbe === "pending" ? (
+            <div className="cast-panel px-5 py-6" aria-busy>
+              <div className="cast-shimmer h-3 w-72 rounded" />
+            </div>
+          ) : (
+            <EmptyNotice
+              what="no project is selected, so there is nothing to query."
+              produces="choosing a project above — this deployment named no demo project to fall back on"
+            />
+          )
         ) : unauthorized ? (
           <section className="cast-panel px-5 py-6">
             <ErrorNotice

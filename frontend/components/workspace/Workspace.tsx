@@ -26,11 +26,13 @@ import type { TimelineData } from "@/lib/types";
 import { splitSceneRef } from "@/lib/sceneRef";
 import { useSceneStore } from "@/lib/store";
 import { useTimelineStore } from "@/lib/timelineStore";
+import { DEMO_REF, isDemoRef } from "@/lib/demoApi";
 import AppNav from "@/components/AppNav";
 import ApiModeBadge from "@/components/ApiModeBadge";
 import AssistantPanel from "@/components/assistant/AssistantPanel";
 import { useTimelineAudio } from "@/components/timeline/useTimelineAudio";
 import { useTransportClock } from "@/components/timeline/useTransportClock";
+import ColdStartPanel, { coldStartKind } from "@/components/workspace/ColdStart";
 import EditView from "@/components/workspace/EditView";
 import SceneRail from "@/components/workspace/SceneRail";
 import ScriptView from "@/components/workspace/ScriptView";
@@ -44,8 +46,9 @@ import { useSceneTimelineSync } from "@/components/workspace/useSceneTimelineSyn
 /** No projects endpoint exists yet, so the workspace opens on the demo scene
  * unless ?scene= says otherwise. `api.getScene`, `api.getTimeline` and
  * `api.listScenes` all accept the same reference ("demo", "proj_1/4"), which is
- * what lets one control open every part of this page. */
-const DEFAULT_SCENE_REF = "demo";
+ * what lets one control open every part of this page. What "demo" points at is
+ * discovered from the server at runtime — see lib/demoApi.ts. */
+const DEFAULT_SCENE_REF = DEMO_REF;
 
 /** Edit is the default view: a reviewer arriving cold should meet the picture. */
 const DEFAULT_VIEW: WorkspaceView = "edit";
@@ -160,6 +163,18 @@ export default function Workspace() {
 
   const retry = useCallback(() => setAttempt((n) => n + 1), []);
 
+  // A cold start is not one of the failures a panel can usefully report in
+  // place: there is no session, or no project, so the rail, the monitor and the
+  // assistant have nothing to be about. The shell keeps its frame and hands the
+  // middle to one recovery instead of showing three empty regions around an
+  // error strip. Everything else — a 500, a scene missing from a project that
+  // loaded, a timeline that was never rendered — still fails where it happened.
+  const coldStart = coldStartKind({
+    sceneFailure,
+    timelineFailure,
+    onDemoRef: isDemoRef(projectRef),
+  });
+
   /** The URL that opens a given scene in a given view. Both live in the query
    * so a view is shareable — a reviewer can be sent straight to the script. */
   const hrefFor = useCallback((nextRef: string, nextView: WorkspaceView) => {
@@ -229,60 +244,71 @@ export default function Workspace() {
   return (
     <div className="tl-shell flex h-dvh flex-col overflow-hidden text-zinc-200">
       <AppNav width="max-w-none">
-        <ViewSwitch value={view} onChange={setView} />
+        {/* The switch is a control over a loaded scene, and during a cold start
+            it would label a tab panel that is not rendered. It stands down with
+            the rest of the workspace rather than offering an empty choice. */}
+        {coldStart === null && <ViewSwitch value={view} onChange={setView} />}
         <ApiModeBadge />
       </AppNav>
 
-      <div className="flex min-h-0 flex-1">
-        <SceneRail
-          projectRef={projectRef}
-          activeOrdinal={timelineData?.sceneOrdinal ?? ordinal}
-          scenes={sceneList}
-          openTitle={sceneData?.title ?? timelineData?.sceneTitle ?? null}
-          onOpen={openScene}
-          sceneFailure={sceneFailure}
-          onRetry={retry}
+      {coldStart !== null ? (
+        <ColdStartPanel
+          kind={coldStart.kind}
+          failure={coldStart.failure}
+          onRecovered={retry}
         />
-
-        <div
-          id={VIEW_PANEL_ID}
-          role="tabpanel"
-          aria-labelledby={viewTabId(view)}
-          className="flex min-h-0 min-w-0 flex-1 flex-col"
-        >
-          {view === "edit" ? (
-            <EditView
-              onActivateAudio={activate}
-              loading={timelineLoading}
-              failure={timelineFailure}
-              onRetry={retry}
-            />
-          ) : (
-            <ScriptView
-              onActivateAudio={activate}
-              loading={timelineLoading}
-              failure={timelineFailure}
-              onRetry={retry}
-            />
-          )}
-        </div>
-
-        {/* The assistant is the third fixed region, not a drawer: it edits the
-            story graph, and when it applies an edit the shell — not the panel —
-            refetches the scene and the timeline it just changed. Below `lg`
-            there is no honest way to keep three columns on one non-scrolling
-            page, so it and the rail step aside rather than shrink to nothing. */}
-        <aside
-          aria-label="Assistant"
-          className="hidden w-[336px] shrink-0 lg:block"
-        >
-          <AssistantPanel
-            projectId={timelineData?.projectId ?? projectRef}
-            sceneOrdinal={timelineData?.sceneOrdinal ?? ordinal}
-            onEditsApplied={retry}
+      ) : (
+        <div className="flex min-h-0 flex-1">
+          <SceneRail
+            projectRef={projectRef}
+            activeOrdinal={timelineData?.sceneOrdinal ?? ordinal}
+            scenes={sceneList}
+            openTitle={sceneData?.title ?? timelineData?.sceneTitle ?? null}
+            onOpen={openScene}
+            sceneFailure={sceneFailure}
+            onRetry={retry}
           />
-        </aside>
-      </div>
+
+          <div
+            id={VIEW_PANEL_ID}
+            role="tabpanel"
+            aria-labelledby={viewTabId(view)}
+            className="flex min-h-0 min-w-0 flex-1 flex-col"
+          >
+            {view === "edit" ? (
+              <EditView
+                onActivateAudio={activate}
+                loading={timelineLoading}
+                failure={timelineFailure}
+                onRetry={retry}
+              />
+            ) : (
+              <ScriptView
+                onActivateAudio={activate}
+                loading={timelineLoading}
+                failure={timelineFailure}
+                onRetry={retry}
+              />
+            )}
+          </div>
+
+          {/* The assistant is the third fixed region, not a drawer: it edits the
+              story graph, and when it applies an edit the shell — not the panel —
+              refetches the scene and the timeline it just changed. Below `lg`
+              there is no honest way to keep three columns on one non-scrolling
+              page, so it and the rail step aside rather than shrink to nothing. */}
+          <aside
+            aria-label="Assistant"
+            className="hidden w-[336px] shrink-0 lg:block"
+          >
+            <AssistantPanel
+              projectId={timelineData?.projectId ?? projectRef}
+              sceneOrdinal={timelineData?.sceneOrdinal ?? ordinal}
+              onEditsApplied={retry}
+            />
+          </aside>
+        </div>
+      )}
     </div>
   );
 }

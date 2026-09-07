@@ -9,11 +9,12 @@
 //   <FailurePanel> a failed request, in the app's own voice, keeping the
 //                  server's `detail` verbatim and offering a retry.
 
-import { useState } from "react";
+import { useEffect, useState } from "react";
 import { motion, useReducedMotion } from "motion/react";
 import type { JudgeEngine } from "@/lib/types";
 import { JUDGE_ENGINE_META } from "@/lib/types";
-import { login, register } from "@/lib/apiClient";
+import { ApiError, login, register } from "@/lib/apiClient";
+import { forgetDemoSession, loadDemoStatus, startDemoSession } from "@/lib/demoApi";
 import { describeFailure, FOCUS_RING } from "@/components/casting/theme";
 
 export function EngineChip({
@@ -49,13 +50,50 @@ export function EngineChip({
  * route, so without this an auth failure is a dead end: the page would report
  * "not signed in" with no way to sign in. Tokens go through `lib/apiClient`,
  * which is the only thing that touches storage.
+ *
+ * A no-password way in comes first when the deployment has one. A judge opening
+ * the casting studio on a fresh instance holds no account and cannot make one
+ * worth making, so "sign in or give up" was the whole of this prompt for the
+ * one visitor it most needed to serve. `Continue as demo` is the same recovery
+ * the workspace's cold-start panel offers (components/workspace/ColdStart.tsx),
+ * folded in here so every 401 in the app has the same two answers.
  */
-function AuthPrompt({ onSignedIn }: { onSignedIn?: () => void }) {
+function AuthPrompt({
+  onSignedIn,
+  compact = false,
+}: {
+  onSignedIn?: () => void;
+  /** Narrow host panel (the scene rail): drop the prose, keep the action. */
+  compact?: boolean;
+}) {
   const [email, setEmail] = useState("");
   const [password, setPassword] = useState("");
   const [creating, setCreating] = useState(false);
   const [busy, setBusy] = useState(false);
   const [problem, setProblem] = useState<string | null>(null);
+  /** null while the probe is out — the button is not offered on a guess. */
+  const [demoOffered, setDemoOffered] = useState<boolean | null>(null);
+  const [demoBusy, setDemoBusy] = useState(false);
+
+  // Memoized in lib/demoApi: shared with whatever resolution the failed load
+  // already made, so this is at most one unauthenticated GET.
+  useEffect(() => {
+    let cancelled = false;
+    loadDemoStatus()
+      .then((s) => {
+        if (!cancelled) setDemoOffered(s.enabled);
+      })
+      .catch((err: unknown) => {
+        // A 404 is this build's API saying it has no demo endpoint; anything
+        // else is a probe that did not land, which is not proof of absence.
+        if (!cancelled) {
+          setDemoOffered(!(err instanceof ApiError && err.status === 404));
+        }
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, []);
 
   const submit = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -64,6 +102,8 @@ function AuthPrompt({ onSignedIn }: { onSignedIn?: () => void }) {
     setProblem(null);
     try {
       await (creating ? register(email, password) : login(email, password));
+      // See SignInForm: a real account must not inherit the demo's project id.
+      forgetDemoSession();
       onSignedIn?.();
     } catch (err) {
       setProblem(describeFailure(err).detail);
@@ -72,11 +112,55 @@ function AuthPrompt({ onSignedIn }: { onSignedIn?: () => void }) {
     }
   };
 
+  const continueAsDemo = async () => {
+    setDemoBusy(true);
+    setProblem(null);
+    try {
+      await startDemoSession();
+      onSignedIn?.();
+    } catch (err) {
+      // 403 is "this deployment runs no demo" — a decision, not a fault. The
+      // button withdraws and the credentials below become the only way in.
+      if (err instanceof ApiError && err.status === 403) setDemoOffered(false);
+      setProblem(describeFailure(err).detail);
+    } finally {
+      setDemoBusy(false);
+    }
+  };
+
   const field =
     "min-w-0 flex-1 rounded-lg border border-[var(--hairline-strong)] bg-[var(--surface-3)] px-3 py-1.5 text-[11px] text-zinc-100 placeholder-zinc-600 outline-none transition-colors focus:border-sky-500";
 
   return (
     <form onSubmit={submit} className="mt-3 border-t border-[var(--hairline)] pt-3">
+      {demoOffered && (
+        <>
+          <div className="mb-3 flex flex-wrap items-center gap-2">
+            <button
+              type="button"
+              onClick={continueAsDemo}
+              disabled={demoBusy}
+              className={`shrink-0 rounded-lg bg-amber-400 px-3 py-1.5 text-[11px] font-semibold text-zinc-950 transition-colors hover:bg-amber-300 disabled:cursor-not-allowed disabled:opacity-40 ${FOCUS_RING}`}
+            >
+              {demoBusy ? "Opening the demo…" : "Continue as demo"}
+            </button>
+            {/* The explainer is dropped in a compact panel, where the whole
+                prompt is a column narrower than this sentence. */}
+            {!compact && (
+              <span className="text-[10.5px] leading-relaxed text-zinc-500">
+                Seeds this deployment&rsquo;s sample project if it is missing and
+                signs this browser in.{" "}
+                <span className="font-mono text-zinc-600">
+                  POST /api/v1/demo/session
+                </span>
+              </span>
+            )}
+          </div>
+          <p className="mb-2 font-mono text-[10px] uppercase tracking-wider text-zinc-600">
+            Or sign in with an account
+          </p>
+        </>
+      )}
       <div className="flex flex-wrap items-center gap-2">
         <input
           type="email"
@@ -96,10 +180,17 @@ function AuthPrompt({ onSignedIn }: { onSignedIn?: () => void }) {
           aria-label="Password"
           className={`${field} ${FOCUS_RING}`}
         />
+        {/* One primary action at a time: where the demo button is offered above
+            it is the recommended way in, so this steps down to the quiet
+            treatment rather than competing with it in the same amber. */}
         <button
           type="submit"
           disabled={busy || !email || !password}
-          className={`shrink-0 rounded-lg bg-amber-400 px-3 py-1.5 text-[11px] font-semibold text-zinc-950 transition-colors hover:bg-amber-300 disabled:cursor-not-allowed disabled:opacity-40 ${FOCUS_RING}`}
+          className={`shrink-0 rounded-lg px-3 py-1.5 text-[11px] font-semibold transition-colors disabled:cursor-not-allowed disabled:opacity-40 ${
+            demoOffered
+              ? "border border-[var(--hairline-strong)] bg-white/[0.04] text-zinc-200 hover:border-amber-400/50 hover:text-zinc-50"
+              : "bg-amber-400 text-zinc-950 hover:bg-amber-300"
+          } ${FOCUS_RING}`}
         >
           {busy ? "…" : creating ? "Create & sign in" : "Sign in"}
         </button>
@@ -195,7 +286,7 @@ export function FailurePanel({
         )}
       </div>
 
-      {f.kind === "auth" && <AuthPrompt onSignedIn={onRetry} />}
+      {f.kind === "auth" && <AuthPrompt onSignedIn={onRetry} compact={compact} />}
     </motion.div>
   );
 }
