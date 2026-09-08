@@ -38,8 +38,14 @@ from sqlalchemy.dialects import postgresql
 
 from app.db import models
 
-MIGRATION_PATH = (
-    Path(__file__).parent.parent / "alembic" / "versions" / "0002_api_record_store.py"
+# Every migration that builds part of the record store, in order. 0002 created
+# it; 0003 added the casting table. They are read together because the models
+# they are compared against are one set - checking only the first would let a
+# table added by a later revision look like a model with no migration.
+_VERSIONS = Path(__file__).parent.parent / "alembic" / "versions"
+MIGRATION_PATHS = (
+    _VERSIONS / "0002_api_record_store.py",
+    _VERSIONS / "0003_casting.py",
 )
 
 
@@ -80,8 +86,8 @@ class _OpRecorder:
         self.dropped_indexes.append(name)
 
 
-def _load_migration():
-    spec = importlib.util.spec_from_file_location("_migration_0002_under_test", MIGRATION_PATH)
+def _load_migration(path: Path):
+    spec = importlib.util.spec_from_file_location(f"_migration_{path.stem}_under_test", path)
     assert spec is not None and spec.loader is not None
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
@@ -90,13 +96,21 @@ def _load_migration():
 
 @pytest.fixture(scope="module")
 def migration_context() -> tuple[Any, _OpRecorder]:
-    """The loaded migration module and the recorder that ran its upgrade()."""
-    migration = _load_migration()
+    """The loaded migration modules and the recorder that ran their upgrade()s.
+
+    All the record-store revisions replay into ONE recorder, in order, so the
+    result is the schema a fresh `alembic upgrade head` would leave behind
+    rather than the state after any single revision.
+    """
     metadata = sa.MetaData()
     recorder = _OpRecorder(metadata)
-    migration.op = recorder
-    migration.upgrade()
-    return migration, recorder
+    modules = []
+    for path in MIGRATION_PATHS:
+        migration = _load_migration(path)
+        migration.op = recorder
+        migration.upgrade()
+        modules.append(migration)
+    return modules, recorder
 
 
 @pytest.fixture(scope="module")
@@ -177,18 +191,39 @@ def test_indexes_match(migration_context, model_tables):
 
 
 def test_downgrade_drops_exactly_the_tables_and_indexes_upgrade_created(migration_context):
-    migration, recorder = migration_context
-    migration.downgrade()
+    migrations, recorder = migration_context
+    # Reverse order, the way alembic unwinds a history: the newest revision
+    # drops its own tables first.
+    for migration in reversed(migrations):
+        migration.downgrade()
     assert set(recorder.dropped_tables) == set(recorder.tables)
     assert set(recorder.dropped_indexes) == {ix[0] for ix in recorder.indexes}
 
 
-def test_store_tables_constant_is_exactly_the_nine_record_store_tables(model_tables):
-    # Guards against a new StoredX model being added to models.py without also
-    # being added to STORE_TABLES (which is what create_store_schema and this
-    # very test suite iterate over) - an easy way for a table to silently
-    # never get created outside of a full alembic history.
-    assert len(model_tables) == 9
+def test_store_tables_constant_covers_every_stored_model(model_tables):
+    """Every ``Stored*`` model must be listed in ``STORE_TABLES``.
+
+    Guards against a new model being added to models.py without also being
+    added to the constant that ``create_store_schema`` - and this very suite -
+    iterate over, which is how a table silently never gets created outside a
+    full alembic history. That is not hypothetical: the casting table was added
+    to models.py and to the migration, and only the conformance suite's sqlite
+    run ("no such table: store_castings") revealed the constant had been missed.
+
+    Derived rather than a hardcoded count, so adding a table cannot be "fixed"
+    by bumping a number without adding it to the constant.
+    """
+    declared = {
+        cls.__table__.name
+        for cls in vars(models).values()
+        if isinstance(cls, type)
+        and cls.__name__.startswith("Stored")
+        and hasattr(cls, "__table__")
+    }
+    assert declared == set(model_tables), (
+        f"models declare {sorted(declared)} but STORE_TABLES lists "
+        f"{sorted(model_tables)}"
+    )
 
 
 class TestAlembicResolvesTheSameUrlAsTheApp:

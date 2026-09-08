@@ -403,8 +403,8 @@ def propose_casting_with_tone(graph: StoryGraph, voices: Sequence[Voice]) -> Cas
     distinct = len({entry.voice_id for entry in entries})
     rationale = (
         f"Cast {len(entries)} part(s) — the narrator and {len(ranked)} character(s) — "
-        f"across {distinct} of {len(catalogue)} available voice(s); {toned} part(s) carry a "
-        f"tone proposed from evidence in the script, {len(entries) - toned} are left "
-        "deliberately untoned for want of any."
+        f"across {distinct} of {len(catalogue)} available voice(s); {toned} part(s) "
+        f"{_carry(toned)} a tone proposed from evidence in the script, "
+        f"{len(entries) - toned} left deliberately untoned for want of any."
     )
     return CastingProposal(entries=entries, rationale=rationale)
