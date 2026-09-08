@@ -179,6 +179,12 @@ async def render_scene_audio_with_timing(
             )
 
     tones = tone_map or {}
+    # Kept per line so the timeline can report the emotion each clip was
+    # actually synthesized with. Reporting line.emotion there instead would
+    # show null for a clip the casting delivered as 'calm' - a timeline that
+    # disagrees with its own audio, which is the failure this pipeline is
+    # careful to avoid elsewhere.
+    effective_emotions: list[str | None] = []
     tasks = []
     for line in lines:
         speaker = line.character_name if line.kind == "dialogue" else None
@@ -187,6 +193,7 @@ async def render_scene_audio_with_timing(
         # docstring. `or` is correct rather than a membership test because an
         # emotion of None and an absent one mean the same thing here: no cue.
         emotion = line.emotion or tones.get(speaker)
+        effective_emotions.append(emotion)
         tasks.append(synthesize(line.text, voice_id, emotion))
     results = await asyncio.gather(*tasks)
 
@@ -228,7 +235,7 @@ async def render_scene_audio_with_timing(
             line_ordinal=lines[entry.clip_index].ordinal,
             kind=lines[entry.clip_index].kind,
             character_name=clips[entry.clip_index].character_name,
-            emotion=lines[entry.clip_index].emotion,
+            emotion=effective_emotions[entry.clip_index],
             text=lines[entry.clip_index].text,
             start_ms=entry.start_ms,
             duration_ms=clips[entry.clip_index].duration_ms,

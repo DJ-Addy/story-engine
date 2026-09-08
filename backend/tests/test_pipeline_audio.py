@@ -323,3 +323,76 @@ class TestRetryBudgetOutlastsAPerMinuteQuota:
         finally:
             monkeypatch.undo()
             importlib.reload(pipeline)
+
+
+class TestTimelineReportsWhatWasSynthesized:
+    """The timeline's emotion must be the one the clip was rendered with.
+
+    Reporting the line's own emotion instead showed null for a clip the casting
+    delivered as 'calm' - a timeline that disagrees with its own audio. The
+    casting reached the synthesizer correctly; only the report was wrong, which
+    is the harder version of the bug to notice.
+    """
+
+    @staticmethod
+    def _scene(fountain: str):
+        from app.ingest.fountain import parse_fountain
+        from app.ingest.normalize import normalize
+
+        return normalize(parse_fountain(fountain)).scenes[1]
+
+    async def test_casting_tone_appears_in_the_timeline(self, sample_fountain: str):
+        from app.adapters.fake import FakeTTS
+        from app.render.audio.pipeline import render_scene_audio_with_timing
+
+        scene = self._scene(sample_fountain)
+        tts = FakeTTS()
+        voices = await tts.list_voices()
+        speakers = {
+            line.character_name
+            for line in scene.lines
+            if line.kind == "dialogue" and line.character_name
+        }
+        voice_map = {None: voices[0].id}
+        for name in speakers:
+            voice_map[name] = voices[-1].id
+
+        _result, timing = await render_scene_audio_with_timing(
+            scene, voice_map, tts, tone_map={None: "calm"}
+        )
+
+        narration = [c for c in timing.clips if c.character_name is None]
+        assert narration, "expected narration clips"
+        assert all(clip.emotion == "calm" for clip in narration)
+
+    async def test_a_lines_own_emotion_still_wins(self, sample_fountain: str):
+        """A parenthetical is specific; a casting is general. Specific wins."""
+        from app.adapters.fake import FakeTTS
+        from app.render.audio.pipeline import render_scene_audio_with_timing
+
+        scene = self._scene(sample_fountain)
+        tts = FakeTTS()
+        voices = await tts.list_voices()
+        tagged = [line for line in scene.lines if line.emotion]
+        if not tagged:
+            import pytest
+
+            pytest.skip("fixture has no parenthetical-tagged line")
+
+        voice_map = {None: voices[0].id}
+        for line in scene.lines:
+            if line.kind == "dialogue" and line.character_name:
+                voice_map[line.character_name] = voices[-1].id
+
+        _result, timing = await render_scene_audio_with_timing(
+            scene,
+            voice_map,
+            tts,
+            tone_map=dict.fromkeys(voice_map, "shouting"),
+        )
+
+        by_ordinal = {clip.line_ordinal: clip for clip in timing.clips}
+        for line in tagged:
+            clip = by_ordinal.get(line.ordinal)
+            if clip is not None:
+                assert clip.emotion == line.emotion
