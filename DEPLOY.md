@@ -7,6 +7,10 @@ localhost. Nothing in the app code changes between local and deployed.
 
 ## 1. Prerequisites
 
+Credentials, billing and free-trial credit are covered in
+**[SETUP.md](SETUP.md)**; this page assumes `gcloud` is installed, a project is
+selected and billing is attached to it.
+
 ```bash
 gcloud config set project YOUR_PROJECT_ID
 gcloud services enable run.googleapis.com aiplatform.googleapis.com \

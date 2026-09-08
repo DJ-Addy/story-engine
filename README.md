@@ -158,7 +158,11 @@ cd frontend && npm run build && npx tsc --noEmit
 
 ## Deploying
 
-See **[DEPLOY.md](DEPLOY.md)** — one container on Cloud Run, with the service
+See **[SETUP.md](SETUP.md)** first — which accounts and credentials Veo, Google
+TTS and the agent network actually need, what the free trial does and does not
+cover, and what the deployed container costs while idle.
+
+Then **[DEPLOY.md](DEPLOY.md)** — one container on Cloud Run, with the service
 account roles, bucket, secrets and Cloud SQL steps spelled out.
 
 ## Licence
