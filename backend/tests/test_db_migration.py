@@ -189,3 +189,41 @@ def test_store_tables_constant_is_exactly_the_nine_record_store_tables(model_tab
     # very test suite iterate over) - an easy way for a table to silently
     # never get created outside of a full alembic history.
     assert len(model_tables) == 9
+
+
+class TestAlembicResolvesTheSameUrlAsTheApp:
+    """The migration must reach the database the application will reach.
+
+    Cloud Run attaches Cloud SQL by mounting a unix socket and setting
+    CLOUD_SQL_CONNECTION_NAME — there is no URL anywhere. env.py used to read
+    DATABASE_URL alone, so it fell through to its localhost default and the
+    container died on startup with "Is the server running on that host and
+    accepting TCP/IP connections?", having never tried the socket.
+    """
+
+    def test_env_py_uses_the_shared_resolver(self) -> None:
+        from pathlib import Path
+
+        env_py = Path(__file__).resolve().parent.parent / "alembic" / "env.py"
+        source = env_py.read_text(encoding="utf-8")
+        assert "resolve_database_url" in source, (
+            "alembic/env.py must resolve through app.db.session.resolve_database_url, "
+            "or a Cloud SQL socket deployment migrates against localhost"
+        )
+
+    def test_resolver_returns_a_socket_url_for_the_cloud_run_shape(
+        self, monkeypatch
+    ) -> None:
+        from app.db.session import resolve_database_url
+
+        for var in ("DATABASE_URL", "INSTANCE_UNIX_SOCKET", "STORY_ENGINE_REPO"):
+            monkeypatch.delenv(var, raising=False)
+        monkeypatch.setenv("CLOUD_SQL_CONNECTION_NAME", "proj:us-central1:inst")
+        monkeypatch.setenv("DB_USER", "postgres")
+        monkeypatch.setenv("DB_NAME", "story_engine")
+
+        url = resolve_database_url()
+
+        assert url is not None
+        assert "/cloudsql/proj:us-central1:inst" in url.replace("%2F", "/").replace("%3A", ":")
+        assert "@/" in url, "a socket URL carries no host:port"

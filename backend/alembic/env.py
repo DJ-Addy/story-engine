@@ -1,7 +1,14 @@
 """Alembic environment for Story Engine.
 
-Resolves the database URL from the DATABASE_URL environment variable,
-falling back to postgresql+psycopg://localhost/story_engine.
+Resolves the database URL through :func:`app.db.session.resolve_database_url`,
+so the migration reaches the same database the application will. Reading
+DATABASE_URL alone was not enough: Cloud Run attaches Cloud SQL by mounting a
+unix socket and setting CLOUD_SQL_CONNECTION_NAME, with no URL anywhere, and a
+migration that only knew DATABASE_URL fell through to its localhost default and
+died trying to open TCP to a server that was never there.
+
+Falls back to DATABASE_URL and then to a local default so a developer running
+`alembic upgrade head` by hand behaves exactly as before.
 """
 
 import os
@@ -12,14 +19,17 @@ from sqlalchemy import engine_from_config, pool
 
 from app.db.base import Base
 from app.db import models  # noqa: F401  (ensure all tables are registered)
+from app.db.session import resolve_database_url
 
 config = context.config
 
 if config.config_file_name is not None:
     fileConfig(config.config_file_name)
 
-database_url = os.environ.get(
-    "DATABASE_URL", "postgresql+psycopg://localhost/story_engine"
+database_url = (
+    resolve_database_url()
+    or os.environ.get("DATABASE_URL", "").strip()
+    or "postgresql+psycopg://localhost/story_engine"
 )
 config.set_main_option("sqlalchemy.url", database_url)
 
