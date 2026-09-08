@@ -10,6 +10,18 @@ import type { NextConfig } from "next";
 const API_PROXY_TARGET = process.env.API_PROXY_TARGET ?? "http://127.0.0.1:8000";
 
 const nextConfig: NextConfig = {
+  // Next proxies /api/v1 with a 30-SECOND default timeout
+  // (server/lib/router-utils/proxy-request.js: `proxyTimeout || 30000`), which
+  // is shorter than two things the API legitimately does. A Veo render is
+  // submit/poll/fetch and polls for up to 600s; an audio render backs off
+  // around a per-minute TTS quota. Both used to die at exactly 30s with a
+  // "socket hang up" — the proxy dropping the connection, which cancels the
+  // handler upstream, so the work was lost rather than merely un-awaited.
+  //
+  // 15 minutes sits above Veo's own poll timeout and well below the Cloud Run
+  // request timeout of 3600s set in DEPLOY.md, so whichever limit is reached
+  // first is one that means something.
+  experimental: { proxyTimeout: 900_000 },
   // Emits .next/standalone: server.js plus only the modules it actually
   // imports, so the Cloud Run image carries no node_modules and no npm.
   output: "standalone",
