@@ -54,14 +54,11 @@ router = APIRouter(prefix="/projects/{project_id}/scenes/{ordinal}", tags=["scen
 # the pre-flight cost estimate matches what actually gets synthesized.
 _SPOKEN_KINDS = {"dialogue", "action", "narration"}
 
-_NARRATOR_VOICE = "en-US-GuyNeural"
-_SPEAKER_VOICE_POOL = [
-    "en-US-JennyNeural",
-    "en-US-AriaNeural",
-    "en-GB-RyanNeural",
-    "en-GB-SoniaNeural",
-    "en-US-ChristopherNeural",
-]
+# No literal voice pool lives here any more. The previous one held Edge TTS
+# names, which outlived the adapter they belonged to: against Google Cloud TTS
+# every render died with `Voice 'en-US-AriaNeural' does not exist`. A pool
+# written down beside the renderer cannot help but rot the moment the provider
+# behind it changes, so the catalogue is asked for instead — see `_voice_map`.
 
 
 def _estimate_cost_cents(scene: NormalizedScene, tts: TTSProvider) -> int:
@@ -72,7 +69,35 @@ def _estimate_cost_cents(scene: NormalizedScene, tts: TTSProvider) -> int:
     )
 
 
-def _voice_map(scene: NormalizedScene) -> dict[str | None, str]:
+async def _voice_map(
+    scene: NormalizedScene, tts: TTSProvider
+) -> dict[str | None, str]:
+    """Give the narrator and every speaking character a voice the provider has.
+
+    The catalogue comes from the provider, so this cannot name a voice that does
+    not exist: `list_voices` on the Google adapter is a static list and costs no
+    network call. Characters are sorted by name and dealt voices round-robin, so
+    the same scene renders identically twice.
+
+    The narrator prefers a voice tagged `narrator`, and characters are dealt
+    from the remaining voices so the narration does not share a voice with a
+    character unless the catalogue is too small to avoid it.
+
+    GAP: this is not the casting the studio judged. Nothing persists a casting
+    yet - `app.api.repo` has no place to put one - so the voice-fit scores and
+    the rendered audio are still two separate opinions about the same scene.
+    """
+    catalogue = await tts.list_voices()
+    if not catalogue:
+        raise HTTPException(
+            status_code=503,
+            detail=f"TTS provider {tts.name!r} published no voices to render with",
+        )
+
+    ids = [voice.id for voice in catalogue]
+    narrator = next((v.id for v in catalogue if "narrator" in v.tags), ids[0])
+    pool = [voice_id for voice_id in ids if voice_id != narrator] or ids
+
     speakers = sorted(
         {
             line.character_name
@@ -80,9 +105,9 @@ def _voice_map(scene: NormalizedScene) -> dict[str | None, str]:
             if line.kind == "dialogue" and line.character_name
         }
     )
-    voice_map: dict[str | None, str] = {None: _NARRATOR_VOICE}
+    voice_map: dict[str | None, str] = {None: narrator}
     for index, speaker in enumerate(speakers):
-        voice_map[speaker] = _SPEAKER_VOICE_POOL[index % len(_SPEAKER_VOICE_POOL)]
+        voice_map[speaker] = pool[index % len(pool)]
     return voice_map
 
 
@@ -266,7 +291,7 @@ async def render_audio(
     # what makes that edit audible.
     settings = repo.get_render_settings(project.id, ordinal)
     result, timing = await render_scene_audio_with_timing(
-        scene, _voice_map(scene), tts, settings=settings
+        scene, await _voice_map(scene, tts), tts, settings=settings
     )
     project.cost_spent_cents += estimated_cents
     wav_bytes = await _persist_wav(store, project.id, ordinal, result.wav_bytes)

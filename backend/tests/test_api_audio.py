@@ -138,3 +138,63 @@ def test_render_audio_cost_cap_exceeded_402(client, repo, sample_fountain):
         f"/api/v1/projects/{project_id}/scenes/1/render/audio", headers=headers
     )
     assert r.status_code == 402
+
+
+class TestVoicesComeFromTheProvider:
+    """Every voice the renderer names must be one the provider actually has.
+
+    The pool used to be a literal list of Edge TTS names that outlived the
+    adapter it belonged to. Against Google Cloud TTS every render failed with
+    `Voice 'en-US-AriaNeural' does not exist. Is it misspelled?` — a 503 raised
+    on the provider's own 400, after the scene had been parsed and priced.
+    """
+
+    @staticmethod
+    def _scene(fountain: str):
+        from app.ingest.fountain import parse_fountain
+        from app.ingest.normalize import normalize
+
+        return normalize(parse_fountain(fountain)).scenes[1]
+
+    async def test_every_assigned_voice_exists_in_the_catalogue(
+        self, sample_fountain: str
+    ) -> None:
+        from app.adapters.fake import FakeTTS
+        from app.api.routers.scenes import _voice_map
+
+        tts = FakeTTS()
+        catalogue = {voice.id for voice in await tts.list_voices()}
+
+        mapping = await _voice_map(self._scene(sample_fountain), tts)
+
+        assert mapping, "expected at least a narrator"
+        unknown = set(mapping.values()) - catalogue
+        assert not unknown, f"voices absent from the provider catalogue: {unknown}"
+
+    async def test_narrator_and_characters_differ_when_the_pool_allows(
+        self, sample_fountain: str
+    ) -> None:
+        from app.adapters.fake import FakeTTS
+        from app.api.routers.scenes import _voice_map
+
+        tts = FakeTTS()
+        mapping = await _voice_map(self._scene(sample_fountain), tts)
+
+        narrator = mapping[None]
+        characters = [v for k, v in mapping.items() if k is not None]
+        if len(await tts.list_voices()) > 1:
+            assert narrator not in characters, (
+                "the narrator should not share a voice with a character "
+                "while the catalogue has room"
+            )
+
+    async def test_assignment_is_deterministic(self, sample_fountain: str) -> None:
+        """The same scene must render the same way twice."""
+        from app.adapters.fake import FakeTTS
+        from app.api.routers.scenes import _voice_map
+
+        scene = self._scene(sample_fountain)
+        first = await _voice_map(scene, FakeTTS())
+        second = await _voice_map(scene, FakeTTS())
+
+        assert first == second
