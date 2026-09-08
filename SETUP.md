@@ -56,12 +56,20 @@ backend/app/api/routers/renders.py:184   governor.guard(project.cost_spent_cents
                                                         estimated_cents)
 ```
 
-That is an application-level budget stored on the project record, and refusals
-are written to ClickHouse with the headroom that caused them. It cannot stop
-spending that happens outside this app, and it is not a Google quota. Set a
-**budget alert on the billing account as well** — the app's governor and
-Google's billing are independent, and only one of them can actually turn the
-tap off.
+Exceeding it is an **HTTP 402**, `Cost cap exceeded: spent Xc + estimated Yc
+would exceed cap Zc`, raised from all three paid routes (`renders.py:184`,
+`scenes.py:255`, `assist.py:122`). Refusals are written to ClickHouse with the
+headroom that caused them.
+
+**Know this before demo day: no API route can raise the cap.** It is a column on
+the project record with no setter — `backend/tests/test_api_audio.py:132` says
+so outright, and the tests mutate the object directly. If a demo hits $150 the
+only ways up are a database update or a fresh project. At the standard Veo rate
+below, $150 is about **46 eight-second clips** on one project.
+
+The governor is also not a Google quota — it cannot stop spending outside this
+app. Set a **budget alert on the billing account as well**; the two are
+independent, and only Google's can actually turn the tap off.
 
 ---
 
@@ -117,10 +125,26 @@ most of the $300, spent on an idle container. **For a demo, bring
 the tradeoff is a cold start on the first request and some buffered analytics
 lost on scale-down.
 
-Per-unit prices for Veo and Gemini move too often to freeze into a repo; read
-them live at [Vertex AI generative-AI
+### What $300 actually buys
+
+The adapter carries its own rate table, which is what the cost governor uses to
+estimate and refuse *before* calling out (`backend/app/adapters/veo.py:78-85`):
+
+| Model | App's rate | 8-second clip | Clips per $300 |
+|---|---|---|---|
+| `veo-3.1-generate-001` (default) | 40¢/s | $3.20 | ~93 |
+| `veo-3.1-fast-generate-001` | 10¢/s | $0.80 | ~375 |
+
+Cloud TTS is estimated at 0.002¢/character (`google_tts.py:268`) — about $20 per
+million characters, so a feature-length script is cents, not dollars. **Video is
+the only thing here that can eat the credit.**
+
+Treat those as the app's *estimates*, not Google's invoice: they are constants
+in this repo, they drive the 402 refusal, and they can drift from real pricing.
+Per-unit prices move too often to freeze into a repo, so read them live at
+[Vertex AI generative-AI
 pricing](https://cloud.google.com/vertex-ai/generative-ai/pricing) before
-budgeting a render run.
+budgeting a render run — and reconcile against the billing console after.
 
 ---
 
@@ -175,10 +199,20 @@ GOOGLE_CLOUD_PROJECT=your-project-id
 GOOGLE_CLOUD_LOCATION=us-central1
 ```
 
-Leave `GOOGLE_APPLICATION_CREDENTIALS` blank — it is only for pointing at an
-explicit service-account key file, which you should not need. `.env` is
-gitignored and `.dockerignore` keeps it out of images, but a key file on disk is
-still a key file.
+Leave `GOOGLE_APPLICATION_CREDENTIALS` blank — it only points at an explicit
+service-account key file, which you should not need. Worth knowing: **no app
+code ever reads it.** The three provider checks test `GOOGLE_CLOUD_PROJECT`
+alone (`deps.py:83`, `:106`, `:126`); `GOOGLE_APPLICATION_CREDENTIALS` is named
+in the error text for the reader's benefit and consumed by `google-auth`
+itself. So a project set with no working credentials passes the check and fails
+later, at call time, with *"no Google Cloud credentials found; set
+GOOGLE_APPLICATION_CREDENTIALS to a service-account key file or run gcloud auth
+application-default login"* (`google_auth.py:73-76`).
+
+There is **no API-key path anywhere in the backend** — ADC only.
+
+`.env` is gitignored and `.dockerignore` keeps it out of images, but a key file
+on disk is still a key file.
 
 ---
 
@@ -188,8 +222,15 @@ Nothing to request; the API is on as soon as it is enabled and billing exists.
 
 ```bash
 GOOGLE_TTS_MODEL=            # default: gemini-2.5-flash-tts
-GOOGLE_TTS_LANGUAGE_CODE=    # default set by the adapter
+GOOGLE_TTS_LANGUAGE_CODE=    # default: en-US
 ```
+
+**There is no default voice.** `voice_id` is a required argument, chosen from
+eight curated Gemini-TTS voices (`google_tts.py:147-156`) — Charon, Iapetus,
+Puck, Enceladus, Kore, Aoede, Leda, Callirrhoe. `list_voices` is static and
+makes no network call, so the casting UI works before any credential exists.
+Twelve emotion styles map to natural-language prompts (`google_tts.py:70-83`)
+and are asserted at import to match `app.nlp.emotion.EMOTIONS`.
 
 Verify end to end:
 
@@ -223,11 +264,14 @@ Two things to check before demo day:
    behind an allowlist during preview stages, and whether a given variant needs
    one changes with the release. This is the single most likely thing to be
    broken on the day, because it fails at call time, not at deploy time.
-2. **The 3.0 endpoints are retired.** The adapter's cost table still lists
-   `veo-3.0-generate-001` and `veo-3.0-fast-generate-001`
-   (`veo.py:81-82`), which is harmless — they are legacy pricing rows, and the
-   default is already 3.1. Do not "fix" a broken render by pinning
-   `GOOGLE_VEO_MODEL` back to a 3.0 id.
+2. **The 3.0 endpoints are retired** — the adapter says so itself at
+   `veo.py:64-65`: `veo-3.0-generate-001` "reached its retirement date on
+   2026-06-30 and must not be used as a default." The 3.0 rows left in the cost
+   table (`veo.py:80-81`) are legacy pricing only. Do not "fix" a failing render
+   by pinning `GOOGLE_VEO_MODEL` back to a 3.0 id.
+3. **Duration is snapped, and ties round down.** Only 4, 6 and 8 seconds are
+   allowed (`veo.py:69`) while the request default is 5 (`veo.py:258`) — so an
+   unspecified duration renders **4** seconds, not 5.
 
 Cheaper variants exist for iterating; the adapter already knows them:
 
