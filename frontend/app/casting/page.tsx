@@ -1,6 +1,6 @@
 "use client";
 
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useState, useSyncExternalStore } from "react";
 import { api, type CastingData } from "@/lib/api";
 import { useCastingStore } from "@/lib/castingStore";
 import SceneHero from "@/components/casting/SceneHero";
@@ -14,7 +14,40 @@ import AppNav from "@/components/AppNav";
 
 type LoadState = "loading" | "ready" | "failed";
 
+/**
+ * The project the studio opens against.
+ *
+ * `?project=` mirrors the dashboard's parameter, so one link style addresses
+ * both pages. "demo" stays the default, which keeps every existing link and the
+ * cold-start path behaving exactly as before — `lib/httpApi.ts` resolves that
+ * reference to the seeded project at request time, and passes a real id
+ * straight through.
+ *
+ * Read through `useSyncExternalStore` rather than a mount effect, for the same
+ * reason the dashboard does: the server render cannot see the URL, so resolving
+ * it in an effect would either flash the wrong project or cascade a synchronous
+ * setState that React 19 correctly flags.
+ */
+const DEFAULT_PROJECT_REF = "demo";
+
+function urlProjectRef(): string {
+  return (
+    new URLSearchParams(window.location.search).get("project") ||
+    DEFAULT_PROJECT_REF
+  );
+}
+
+const serverProjectRef = () => DEFAULT_PROJECT_REF;
+
+/** The URL does not change under us: the studio has no in-page project switcher. */
+const NEVER_CHANGES = () => () => {};
+
 export default function CastingStudioPage() {
+  const projectRef = useSyncExternalStore(
+    NEVER_CHANGES,
+    urlProjectRef,
+    serverProjectRef,
+  );
   const load = useCastingStore((s) => s.load);
   const [casting, setCasting] = useState<CastingData | null>(null);
   const [state, setState] = useState<LoadState>("loading");
@@ -26,7 +59,7 @@ export default function CastingStudioPage() {
   useEffect(() => {
     let cancelled = false;
     api
-      .getCasting("demo")
+      .getCasting(projectRef)
       .then((data) => {
         if (cancelled) return;
         setCasting(data);
@@ -53,7 +86,7 @@ export default function CastingStudioPage() {
     return () => {
       cancelled = true;
     };
-  }, [load, attempt]);
+  }, [load, attempt, projectRef]);
 
   // The transition back to "loading" happens here, in the event handler, not
   // inside the effect — a synchronous setState in an effect body cascades.
