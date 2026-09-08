@@ -346,3 +346,73 @@ def test_timeline_visual_lane_empty_without_shotlist(client, sample_fountain):
     ).json()
     assert body["visual"] == []
     assert body["dialogue"]  # audio lanes still present
+
+
+def test_timeline_lane_shows_a_casting_tone_the_line_does_not_carry(sample_fountain):
+    """A casting's tone is not an IR fact, so the lane must read the clip.
+
+    Reading emotion off the scene alone reported null for narration a casting
+    had delivered as 'calm' — a timeline describing a different render than the
+    one in the file.
+    """
+    from app.api.routers.scenes import _dialogue_lane
+    from app.render.audio.model import RenderedClip, SceneTiming
+
+    scene = _scene1(sample_fountain)
+    narration = next(line for line in scene.lines if line.kind != "dialogue")
+    timing = SceneTiming(
+        scene_ordinal=scene.ordinal,
+        duration_ms=1000,
+        clips=[
+            RenderedClip(
+                line_ordinal=narration.ordinal,
+                kind=narration.kind,
+                character_name=None,
+                emotion="calm",  # what the casting actually delivered
+                text=narration.text,
+                start_ms=0,
+                duration_ms=1000,
+            )
+        ],
+        ambience=[],
+        sfx=[],
+        markers=[],
+    )
+
+    lane = _dialogue_lane(timing, scene)
+
+    assert narration.emotion is None, "fixture line must carry no tone of its own"
+    assert lane[0].emotion == "calm"
+
+
+def test_a_lines_own_emotion_still_beats_the_rendered_one(sample_fountain):
+    """An edit to the script must show immediately, as it always did."""
+    from app.api.routers.scenes import _dialogue_lane
+    from app.render.audio.model import RenderedClip, SceneTiming
+
+    scene = _scene1(sample_fountain)
+    tagged = next((line for line in scene.lines if line.emotion), None)
+    if tagged is None:
+        pytest.skip("fixture has no parenthetical-tagged line")
+
+    timing = SceneTiming(
+        scene_ordinal=scene.ordinal,
+        duration_ms=1000,
+        clips=[
+            RenderedClip(
+                line_ordinal=tagged.ordinal,
+                kind=tagged.kind,
+                character_name=tagged.character_name,
+                emotion="shouting",
+                text=tagged.text,
+                start_ms=0,
+                duration_ms=1000,
+            )
+        ],
+        ambience=[],
+        sfx=[],
+        markers=[],
+    )
+
+    lane = _dialogue_lane(timing, scene)
+    assert lane[0].emotion == tagged.emotion != "shouting"

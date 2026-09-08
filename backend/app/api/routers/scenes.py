@@ -426,12 +426,19 @@ def _dialogue_lane(
 ) -> list[TimelineDialogueClip]:
     """Stored onsets, live line content.
 
-    Onsets and durations can only come from a render pass, but speaker, emotion
-    and text are IR facts an edit may have changed since. Reading them off the
-    scene means an attribution fix shows on the timeline immediately, while the
+    Onsets and durations can only come from a render pass, but speaker and text
+    are IR facts an edit may have changed since. Reading them off the scene
+    means an attribution fix shows on the timeline immediately, while the
     render's ``stale`` flag carries the (true) news that the WAV still has the
     old voice. Lines the render knew but the IR no longer has fall back to the
     render snapshot.
+
+    Emotion is the exception, and takes the line's own value only when it has
+    one. A casting's tone is not an IR fact - it lives on the casting, not the
+    line - so reading emotion off the scene alone reported null for narration a
+    casting had delivered as 'calm', describing a different render than the one
+    in the file. The line's own parenthetical still wins where it exists, which
+    is the same precedence the renderer applied when it made these clips.
     """
     lines = {line.ordinal: line for line in scene.lines}
     lane: list[TimelineDialogueClip] = []
@@ -442,7 +449,7 @@ def _dialogue_lane(
         else:
             # Mirror the renderer's rule: only dialogue carries a speaker.
             character = line.character_name if line.kind == "dialogue" else None
-            emotion, text = line.emotion, line.text
+            emotion, text = line.emotion or clip.emotion, line.text
         lane.append(
             TimelineDialogueClip(
                 line_ordinal=clip.line_ordinal,
