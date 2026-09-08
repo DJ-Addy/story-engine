@@ -78,15 +78,8 @@ gcloud run deploy story-engine \
     --min-instances 1 \
     --max-instances 1 \
     --no-cpu-throttling \
-    --set-env-vars "GOOGLE_CLOUD_PROJECT=${PROJECT}" \
-    --set-env-vars "GOOGLE_CLOUD_LOCATION=us-central1" \
-    --set-env-vars "GCS_BUCKET=${PROJECT}-story-engine-media" \
-    --set-env-vars "STORY_ENGINE_ANALYTICS_ENABLED=1" \
-    --set-env-vars "CLICKHOUSE_HOST=YOUR_CLICKHOUSE_HOST" \
-    --set-env-vars "CLICKHOUSE_USER=default" \
-    --set-env-vars "CLICKHOUSE_SECURE=true" \
-    --set-secrets "CLICKHOUSE_PASSWORD=clickhouse-password:latest" \
-    --set-secrets "STORY_ENGINE_SECRET=story-engine-secret:latest"
+    --set-env-vars "GOOGLE_CLOUD_PROJECT=${PROJECT},GOOGLE_CLOUD_LOCATION=us-central1,GCS_BUCKET=${PROJECT}-story-engine-media,STORY_ENGINE_ANALYTICS_ENABLED=1,CLICKHOUSE_HOST=YOUR_CLICKHOUSE_HOST,CLICKHOUSE_USER=default,CLICKHOUSE_SECURE=true" \
+    --set-secrets "CLICKHOUSE_PASSWORD=clickhouse-password:latest,STORY_ENGINE_SECRET=story-engine-secret:latest"
 ```
 
 ### Why those flags
@@ -108,8 +101,15 @@ gcloud run deploy story-engine \
 Without a database the in-memory repository loses every project on redeploy.
 
 ```bash
+gcloud services enable sqladmin.googleapis.com
+
+# --edition=ENTERPRISE is required for a shared-core tier: POSTGRES_16 now
+# defaults to ENTERPRISE_PLUS, which rejects db-f1-micro outright with
+# "Invalid Tier (db-f1-micro) for (ENTERPRISE_PLUS) Edition".
 gcloud sql instances create story-engine-db \
-    --database-version=POSTGRES_16 --tier=db-f1-micro --region=us-central1
+    --database-version=POSTGRES_16 --edition=ENTERPRISE \
+    --tier=db-f1-micro --region=us-central1 \
+    --storage-size=10GB --storage-type=HDD --no-backup
 gcloud sql databases create story_engine --instance=story-engine-db
 gcloud sql users set-password postgres --instance=story-engine-db --password=YOUR_DB_PASSWORD
 
@@ -123,8 +123,7 @@ automatically whenever a database is configured:
 ```bash
 gcloud run services update story-engine --region us-central1 \
     --add-cloudsql-instances "${PROJECT}:us-central1:story-engine-db" \
-    --set-env-vars "CLOUD_SQL_CONNECTION_NAME=${PROJECT}:us-central1:story-engine-db" \
-    --set-env-vars "DB_USER=postgres,DB_NAME=story_engine" \
+    --set-env-vars "CLOUD_SQL_CONNECTION_NAME=${PROJECT}:us-central1:story-engine-db,DB_USER=postgres,DB_NAME=story_engine" \
     --set-secrets "DB_PASS=db-password:latest" \
     --max-instances 4
 ```
