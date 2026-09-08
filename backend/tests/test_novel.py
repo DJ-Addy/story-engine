@@ -415,3 +415,21 @@ class TestNovelToScreenplay:
         # High-confidence (0.9) quotes never leave the process.
         assert "The wick wants trimming again" not in user
         assert "There's a boat out past the shoals" not in user
+
+
+
+class TestSungDialogue:
+    """A sung line is dialogue, and attributes like any other."""
+
+    def test_sang_is_a_dialogue_verb_post_tag(self) -> None:
+        quotes = attribute_quotes(['"Come here," sang Mara.'])
+        assert [(q.speaker, q.confidence, q.source) for q in quotes] == [
+            ("Mara", 0.9, "tag")
+        ]
+
+    def test_sang_is_a_dialogue_verb_pre_tag(self) -> None:
+        """The Sirens calling to Ulysses is the case this exists for."""
+        quotes = attribute_quotes(['The Sirens sang, "Come here, renowned Ulysses."'])
+        assert quotes[0].speaker == "The Sirens"
+        assert quotes[0].confidence == 0.9
+        assert quotes[0].source == "tag"

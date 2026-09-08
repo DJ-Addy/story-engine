@@ -134,9 +134,13 @@ def _split_paragraphs(body: str) -> list[str]:
 _OPENING_QUOTES = {'"', "\u201c"}
 _CLOSING_QUOTES = {'"', "\u201d"}
 
+# ``sang`` earns its place beside the speech verbs: in narrative verse a sung
+# line is dialogue, attributed exactly as speech is — the Sirens calling to
+# Ulysses is the canonical case, and without it the one line the scene exists
+# for arrives unattributed.
 _TAG_VERBS = (
     r"(?:said|asked|replied|whispered|shouted|muttered|answered|called|cried"
-    r"|snapped|added)"
+    r"|snapped|added|sang)"
 )
 _NAME = r"(?:(?:Mr|Mrs|Ms|Dr)\.\s+)?[A-Z][a-z]+(?:\s+[A-Z][a-z]+)?"
 _PRONOUN = r"(?:[Hh]e|[Ss]he|[Tt]hey)"
