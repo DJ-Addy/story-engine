@@ -141,6 +141,19 @@ class AnalyticsSettings(BaseModel):
         # STORY_ENGINE_MCP_COMMAND/ARGS to that if you prefer an isolated uv env.
         args = tuple(shlex.split(args_raw)) if args_raw else ("-m", "mcp_clickhouse.main")
 
+        # The child server opens its connection *against* the database named
+        # here, so that database has to already exist. Forwarding Story
+        # Engine's own database is therefore unbootstrappable on a fresh
+        # cluster: the connection fails with UNKNOWN_DATABASE, and so does the
+        # `CREATE DATABASE` that would have fixed it — the statement cannot run
+        # through a connection that requires its own result. Every statement we
+        # send is fully qualified (`story_engine.judge_scores`, via
+        # `qualified()`), so this is only a landing spot, and `default` is the
+        # one database ClickHouse Cloud always ships.
+        connect_database = (
+            os.environ.get("CLICKHOUSE_CONNECT_DATABASE", "").strip() or "default"
+        )
+
         # mcp-clickhouse reads these itself. We only *forward* them, and we pin
         # the two that Story Engine's usage requires: the event tables have to
         # be created and inserted into, which the server refuses in its default
@@ -152,7 +165,7 @@ class AnalyticsSettings(BaseModel):
             "CLICKHOUSE_PASSWORD": os.environ.get("CLICKHOUSE_PASSWORD", ""),
             "CLICKHOUSE_SECURE": os.environ.get("CLICKHOUSE_SECURE", "true"),
             "CLICKHOUSE_VERIFY": os.environ.get("CLICKHOUSE_VERIFY", "true"),
-            "CLICKHOUSE_DATABASE": database,
+            "CLICKHOUSE_DATABASE": connect_database,
             "CLICKHOUSE_CONNECT_TIMEOUT": os.environ.get("CLICKHOUSE_CONNECT_TIMEOUT", "30"),
             "CLICKHOUSE_ALLOW_WRITE_ACCESS": "true",
             "CLICKHOUSE_MCP_SERVER_TRANSPORT": "stdio",

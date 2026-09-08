@@ -121,12 +121,49 @@ def _text_payload(result: Any) -> Any:
     return None
 
 
+# Substrings that only ever appear in a failure. ``mcp-clickhouse`` reports a
+# failed statement *in band*: it logs the exception itself and hands back an
+# ordinary result — ``isError`` unset — whose body is the error text. Without
+# this list a rejected statement is indistinguishable from the human-readable
+# acknowledgement DDL returns, which is how a dead cluster once reported
+# ``reachable: true`` with three rows "written" that ClickHouse never accepted.
+_ERROR_MARKERS = (
+    "db::exception",
+    "error running query",
+    "error executing query",
+    "failed to connect to clickhouse",
+)
+
+
+def _error_text(payload: Any) -> str | None:
+    """The failure described by a tool payload, or ``None`` if it is a success.
+
+    Covers every shape the server has used to say "no": a dict tagged
+    ``status: error``, a dict carrying an ``error`` key, and a bare string that
+    names a ClickHouse exception.
+    """
+    if isinstance(payload, dict):
+        status = payload.get("status")
+        if isinstance(status, str) and status.strip().lower() == "error":
+            return str(payload.get("message") or payload.get("error") or payload)
+        if "error" in payload and "rows" not in payload:
+            return str(payload["error"])
+        return None
+    if isinstance(payload, str):
+        lowered = payload.lower()
+        if any(marker in lowered for marker in _ERROR_MARKERS):
+            return payload.strip()
+    return None
+
+
 def parse_tool_result(result: Any) -> QueryResult:
     """Normalise whatever the MCP tool returned into a :class:`QueryResult`.
 
     Raises :class:`ClickHouseUnavailable` when the tool reported an error, so
     the failure reaches callers as the same class as a transport failure — from
     the caller's point of view "ClickHouse did not answer" is one condition.
+    That includes an error the server chose to report in band rather than by
+    setting ``isError``; see :data:`_ERROR_MARKERS`.
     """
     if getattr(result, "isError", False):
         raise ClickHouseUnavailable(f"clickhouse mcp tool error: {_text_payload(result)}")
@@ -139,14 +176,19 @@ def parse_tool_result(result: Any) -> QueryResult:
         try:
             payload = json.loads(stripped)
         except ValueError:
-            # DDL and INSERT return a human-readable acknowledgement, not JSON.
+            # DDL and INSERT return a human-readable acknowledgement, not JSON
+            # — but so does a rejected statement, so look before assuming.
+            failure = _error_text(stripped)
+            if failure is not None:
+                raise ClickHouseUnavailable(f"clickhouse query failed: {failure}") from None
             return QueryResult()
 
     if payload is None:
         return QueryResult()
     if isinstance(payload, dict):
-        if "error" in payload and "rows" not in payload:
-            raise ClickHouseUnavailable(f"clickhouse query failed: {payload['error']}")
+        failure = _error_text(payload)
+        if failure is not None:
+            raise ClickHouseUnavailable(f"clickhouse query failed: {failure}")
         columns = [str(name) for name in payload.get("columns", [])]
         rows = [list(row) for row in payload.get("rows", [])]
         return QueryResult(columns=columns, rows=rows)
