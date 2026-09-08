@@ -227,3 +227,40 @@ class TestAlembicResolvesTheSameUrlAsTheApp:
         assert url is not None
         assert "/cloudsql/proj:us-central1:inst" in url.replace("%2F", "/").replace("%3A", ":")
         assert "@/" in url, "a socket URL carries no host:port"
+
+    def test_socket_url_survives_configparser(self, monkeypatch) -> None:
+        """A percent-encoded socket URL must round-trip through alembic's config.
+
+        ConfigParser reads % as interpolation syntax. A Cloud SQL socket URL is
+        mostly percent-encoding, so storing it raw raised before any connection
+        was attempted — the container died at import, one layer earlier than the
+        TCP failure it had been dying at before.
+        """
+        from configparser import ConfigParser
+
+        from app.db.session import resolve_database_url
+
+        for var in ("DATABASE_URL", "INSTANCE_UNIX_SOCKET", "STORY_ENGINE_REPO"):
+            monkeypatch.delenv(var, raising=False)
+        monkeypatch.setenv("CLOUD_SQL_CONNECTION_NAME", "proj:us-central1:inst")
+        monkeypatch.setenv("DB_USER", "postgres")
+        monkeypatch.setenv("DB_NAME", "story_engine")
+
+        url = resolve_database_url()
+        assert url is not None and "%" in url, "expected a percent-encoded socket URL"
+
+        parser = ConfigParser()
+        parser.add_section("alembic")
+        parser.set("alembic", "sqlalchemy.url", url.replace("%", "%%"))
+
+        assert parser.get("alembic", "sqlalchemy.url") == url
+
+    def test_env_py_escapes_percent_signs(self) -> None:
+        from pathlib import Path
+
+        env_py = Path(__file__).resolve().parent.parent / "alembic" / "env.py"
+        source = env_py.read_text(encoding="utf-8")
+        assert 'replace("%", "%%")' in source, (
+            "alembic/env.py must escape % before set_main_option, or a Cloud SQL "
+            "socket URL raises in configparser"
+        )

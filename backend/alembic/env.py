@@ -31,7 +31,11 @@ database_url = (
     or os.environ.get("DATABASE_URL", "").strip()
     or "postgresql+psycopg://localhost/story_engine"
 )
-config.set_main_option("sqlalchemy.url", database_url)
+# ConfigParser reads % as interpolation syntax, and a Cloud SQL socket URL is
+# largely percent-encoding (host=%2Fcloudsql%2F...), so storing it raw raises
+# before a connection is ever attempted. Doubling escapes it; configparser
+# turns %% back into % when engine_from_config reads the section below.
+config.set_main_option("sqlalchemy.url", database_url.replace("%", "%%"))
 
 target_metadata = Base.metadata
 
