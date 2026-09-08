@@ -138,7 +138,15 @@ class VeoAdapter:
         # Never resolve credentials here: the module must import and tests must
         # collect with no GCP setup. Resolution happens on first generate.
         self._tokens: TokenSource = token_source or GoogleTokenSource(project=project)
-        self._location = location or os.environ.get("GOOGLE_CLOUD_LOCATION") or _DEFAULT_LOCATION
+        # Veo is genuinely region-pinned, unlike Gemini which is served from
+        # "global". Its own variable wins so the two can differ in one
+        # deployment; GOOGLE_CLOUD_LOCATION stays the shared fallback.
+        self._location = (
+            location
+            or os.environ.get("GOOGLE_VEO_LOCATION")
+            or os.environ.get("GOOGLE_CLOUD_LOCATION")
+            or _DEFAULT_LOCATION
+        )
         self._poll_interval_s = poll_interval_s
         self._poll_timeout_s = poll_timeout_s
         # Injected so tests drive the poll loop instantly with a fake clock/sleep

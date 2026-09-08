@@ -49,7 +49,13 @@ _DEFAULT_MODEL = "gemini-3.8-flash"
 
 # Vertex AI agent traffic is region-pinned (unlike the Gemini "global" endpoint
 # app.adapters.gemini uses), so the ADK path keeps its own location default.
-_DEFAULT_LOCATION = "us-central1"
+# Gemini is served from "global", not from a region: a `generateContent` against
+# us-central1 answers 404 NOT_FOUND for every Gemini model, which is what took
+# the agent network down. `app.adapters.gemini` already defaults this way, and
+# the ADK runs the same models, so it defaults the same way. Veo is the opposite
+# - genuinely region-pinned - which is why it now reads GOOGLE_VEO_LOCATION and
+# no longer shares this setting.
+_DEFAULT_LOCATION = "global"
 
 _DEFAULT_APP_NAME = "story-engine"
 
@@ -221,7 +227,10 @@ class AdkAgentRuntime:
         string. Only defaults are filled in — an operator who has set them wins.
         """
         os.environ.setdefault("GOOGLE_GENAI_USE_VERTEXAI", "1")
-        os.environ.setdefault("GOOGLE_CLOUD_LOCATION", _DEFAULT_LOCATION)
+        os.environ.setdefault(
+            "GOOGLE_CLOUD_LOCATION",
+            os.environ.get("GOOGLE_GEMINI_LOCATION") or _DEFAULT_LOCATION,
+        )
 
     def build(self, spec: AgentSpec, api: AdkApi | None = None) -> object:
         """Turn a spec tree into a tree of real ADK ``LlmAgent`` objects."""

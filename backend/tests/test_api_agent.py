@@ -222,7 +222,7 @@ class TestDescribeNetwork:
         )
         assert data["detail"] is None
         assert data["vertex_backend"] is True
-        assert data["location"] == "us-central1"
+        assert data["location"] == "global"  # Gemini is served from "global"; a region answers 404 for every Gemini model.
 
     def test_names_the_project_variable_when_only_that_is_missing(
         self, client, app, monkeypatch

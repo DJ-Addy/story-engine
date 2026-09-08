@@ -252,7 +252,7 @@ class TestRuntimeStatus:
         assert info.installed is True
         assert info.project_configured is True
         assert info.vertex_backend is True
-        assert info.location == "us-central1"
+        assert info.location == "global"  # Gemini is served from "global"; a region answers 404 for every Gemini model.
 
     def test_runtime_info_degrades_without_the_sdk_or_a_project(self):
         def missing() -> None:
@@ -321,7 +321,7 @@ class TestRun:
                 pass
 
         assert os.environ["GOOGLE_GENAI_USE_VERTEXAI"] == "1"
-        assert os.environ["GOOGLE_CLOUD_LOCATION"] == "us-central1"
+        assert os.environ["GOOGLE_CLOUD_LOCATION"] == "global"  # Gemini is served from "global"; a region answers 404 for every Gemini model.
 
     async def test_a_tool_that_raises_propagates_out_of_the_run(
         self, monkeypatch, seeded_repo
