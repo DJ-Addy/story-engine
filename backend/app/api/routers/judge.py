@@ -22,19 +22,27 @@ from fastapi import APIRouter, Depends, HTTPException
 from app.analytics.events import animatic_events, ranking_events, voice_fit_events
 from app.analytics.recorder import EventRecorder
 from app.api.deps import get_owned_project, get_repo
-from app.api.repo import ProjectRecord, Repository
+from app.api.repo import CastEntry, ProjectRecord, Repository
 from app.api.routers.analytics import emit, get_analytics_recorder
 from app.api.schemas import (
     AnimaticJudgmentOut,
     AnimaticRankingOut,
     AnimaticRankRequest,
+    CastingDecisionRequest,
     VoiceFitOut,
     VoiceFitRequest,
     VoiceRankingOut,
     VoiceRankRequest,
 )
 from app.ingest.elements import StoryGraph
-from app.judge import judge_animatic, judge_voice_fit, rank_animatics, rank_voice_fits
+from app.judge import (
+    CastingProposal,
+    judge_animatic,
+    judge_voice_fit,
+    propose_casting_with_tone,
+    rank_animatics,
+    rank_voice_fits,
+)
 from app.shotlist.schema import SceneShotList
 
 router = APIRouter(prefix="/projects/{project_id}/judge", tags=["judge"])
@@ -45,6 +53,98 @@ def _get_graph_or_404(repo: Repository, project_id: str) -> StoryGraph:
     if script is None:
         raise HTTPException(status_code=404, detail="No script uploaded yet")
     return script.graph
+
+
+@router.post("/casting", response_model=CastingProposal, status_code=201)
+async def decide_casting(
+    body: CastingDecisionRequest,
+    project: ProjectRecord = Depends(get_owned_project),
+    repo: Repository = Depends(get_repo),
+) -> CastingProposal:
+    """Read the script and decide a voice AND a tone for every speaker.
+
+    This is the difference between scoring a casting and making one.
+    ``POST /judge/voices`` grades a casting the caller already has; this reads
+    the lines themselves - who speaks how often, which parentheticals the writer
+    left, how the dialogue is punctuated - and returns a decision, with the
+    evidence it used named in each rationale.
+
+    The result is persisted by default, because a decision nothing records is
+    the state this endpoint exists to end: the renderer reads the saved casting,
+    so proposing without saving would leave the audio unchanged. ``persist:
+    false`` makes it a dry run for a UI that wants to preview before committing.
+    """
+    graph = _get_graph_or_404(repo, project.id)
+
+    voices = body.available_voices
+    if voices is None:
+        # Resolved lazily and only when needed, so a caller who supplies the
+        # pool keeps this endpoint credential-free like every other judge.
+        from app.adapters.base import TerminalProviderError
+        from app.api.deps import get_tts
+
+        try:
+            voices = await get_tts().list_voices()
+        except TerminalProviderError as exc:
+            raise HTTPException(
+                status_code=503,
+                detail=(
+                    f"{exc} - or pass available_voices in the request body to "
+                    "cast without a provider configured"
+                ),
+            ) from exc
+
+    try:
+        proposal = propose_casting_with_tone(graph, voices)
+    except ValueError as exc:
+        raise HTTPException(status_code=422, detail=str(exc)) from exc
+
+    if body.persist:
+        repo.save_casting(
+            project.id,
+            [
+                CastEntry(
+                    character=entry.character,
+                    voice_id=entry.voice_id,
+                    voice_name=entry.voice_name,
+                    tone=entry.tone,
+                    confidence=entry.confidence,
+                    rationale=entry.rationale,
+                )
+                for entry in proposal.entries
+            ],
+            "judge",
+        )
+    return proposal
+
+
+@router.get("/casting", response_model=CastingProposal | None)
+def get_decided_casting(
+    project: ProjectRecord = Depends(get_owned_project),
+    repo: Repository = Depends(get_repo),
+) -> CastingProposal | None:
+    """The casting this project renders with, or null if none was decided."""
+    from app.judge.model import CastingProposalEntry
+
+    record = repo.get_casting(project.id)
+    if record is None:
+        return None
+    return CastingProposal(
+        entries=[
+            CastingProposalEntry(
+                character=entry.character,
+                is_narrator=entry.character is None,
+                voice_id=entry.voice_id,
+                voice_name=entry.voice_name,
+                tone=entry.tone,
+                confidence=entry.confidence,
+                voice_fit=0.0,
+                rationale=entry.rationale,
+            )
+            for entry in record.entries
+        ],
+        rationale=f"Saved casting ({record.source}).",
+    )
 
 
 @router.post("/voices", response_model=VoiceFitOut)

@@ -272,6 +272,20 @@ class FindingPatch(BaseModel):
     deliberate_note: str | None = None
 
 
+class CastingDecisionRequest(BaseModel):
+    """Body for POST .../judge/casting.
+
+    ``available_voices`` is the pool to cast from. Omit it and the deployment's
+    TTS provider is asked for its catalogue instead - which is the right answer
+    on a configured deployment, and a 503 on one with no provider. Passing the
+    pool explicitly keeps this endpoint in the same class as the other judges:
+    no credentials, no network, no spend.
+    """
+
+    available_voices: list[Voice] | None = None
+    persist: bool = True
+
+
 class VoiceFitRequest(BaseModel):
     """Body for POST .../judge/voices.
 

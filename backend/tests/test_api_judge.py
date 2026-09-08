@@ -362,3 +362,81 @@ class TestRankAnimatic:
             headers=headers_b,
         )
         assert r.status_code == 404
+
+
+class TestDecideCasting:
+    """The judge makes a casting and writes it down, so the render can read it."""
+
+    def test_decides_and_persists(self, client, sample_fountain):
+        headers = auth_headers(client)
+        project_id = project_with_script(client, headers, sample_fountain)
+
+        r = client.post(
+            f"/api/v1/projects/{project_id}/judge/casting",
+            json={"available_voices": POOL},
+            headers=headers,
+        )
+        assert r.status_code == 201, r.text
+        entries = r.json()["entries"]
+        assert entries, "expected at least a narrator"
+        # Every id must be one we offered - never invented.
+        assert {e["voice_id"] for e in entries} <= {v["id"] for v in POOL}
+
+        # And it reads back, which is what the renderer relies on.
+        got = client.get(
+            f"/api/v1/projects/{project_id}/judge/casting", headers=headers
+        )
+        assert got.status_code == 200
+        assert [e["voice_id"] for e in got.json()["entries"]] == [
+            e["voice_id"] for e in entries
+        ]
+
+    def test_dry_run_decides_without_saving(self, client, sample_fountain):
+        headers = auth_headers(client)
+        project_id = project_with_script(client, headers, sample_fountain)
+
+        r = client.post(
+            f"/api/v1/projects/{project_id}/judge/casting",
+            json={"available_voices": POOL, "persist": False},
+            headers=headers,
+        )
+        assert r.status_code == 201
+        assert r.json()["entries"]
+
+        got = client.get(
+            f"/api/v1/projects/{project_id}/judge/casting", headers=headers
+        )
+        assert got.json() is None, "a dry run must leave nothing behind"
+
+    def test_no_casting_yet_is_null_not_an_error(self, client, sample_fountain):
+        headers = auth_headers(client)
+        project_id = project_with_script(client, headers, sample_fountain)
+        r = client.get(
+            f"/api/v1/projects/{project_id}/judge/casting", headers=headers
+        )
+        assert r.status_code == 200
+        assert r.json() is None
+
+    def test_empty_voice_pool_is_a_422(self, client, sample_fountain):
+        headers = auth_headers(client)
+        project_id = project_with_script(client, headers, sample_fountain)
+        r = client.post(
+            f"/api/v1/projects/{project_id}/judge/casting",
+            json={"available_voices": []},
+            headers=headers,
+        )
+        assert r.status_code == 422
+
+    def test_404_when_no_script(self, client):
+        headers = auth_headers(client)
+        project_id = client.post(
+            "/api/v1/projects",
+            json={"title": "Empty", "rights_attested": True},
+            headers=headers,
+        ).json()["id"]
+        r = client.post(
+            f"/api/v1/projects/{project_id}/judge/casting",
+            json={"available_voices": POOL},
+            headers=headers,
+        )
+        assert r.status_code == 404
