@@ -24,6 +24,8 @@ from sqlalchemy.orm import Session, sessionmaker
 
 from app.api.repo import (
     AudioRenderRecord,
+    CastEntry,
+    CastingRecord,
     FindingRecord,
     ProjectRecord,
     ScriptRecord,
@@ -524,6 +526,41 @@ class SqlAlchemyRepository:
                 )
             )
         return settings
+
+    # -- casting ---------------------------------------------------------------
+    def save_casting(
+        self, project_id: str, entries: list[CastEntry], source: str
+    ) -> CastingRecord:
+        record = CastingRecord(
+            id=str(uuid4()), project_id=project_id, entries=list(entries), source=source
+        )
+        with self._session.begin() as session:
+            self._replace(session, models.StoredCasting, project_id=project_id)
+            session.add(
+                models.StoredCasting(
+                    id=record.id,
+                    project_id=project_id,
+                    entries=[entry.model_dump(mode="json") for entry in record.entries],
+                    source=source,
+                )
+            )
+        return record
+
+    def get_casting(self, project_id: str) -> CastingRecord | None:
+        with self._session.begin() as session:
+            row = session.scalars(
+                select(models.StoredCasting).where(
+                    models.StoredCasting.project_id == project_id
+                )
+            ).one_or_none()
+            if row is None:
+                return None
+            return CastingRecord(
+                id=row.id,
+                project_id=row.project_id,
+                entries=[CastEntry.model_validate(e) for e in row.entries],
+                source=row.source,
+            )
 
     # -- video renders ---------------------------------------------------------
     def save_video_render(

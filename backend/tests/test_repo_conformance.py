@@ -50,6 +50,7 @@ from sqlalchemy import create_engine
 
 from app.api.repo import InMemoryRepository, Repository
 from app.continuity.model import Finding
+from app.api.repo import CastEntry
 from app.db.repository import SqlAlchemyRepository
 from app.ingest.elements import NormalizedCharacter, NormalizedScene, StoryGraph
 from app.render.audio.model import (
@@ -609,3 +610,84 @@ def test_records_may_reference_a_project_id_that_was_never_created(repo: Reposit
 
     repo.save_audio_render(ghost_project_id, 1, b"wav", 100, 1, [], _timing())
     assert repo.get_audio_render(ghost_project_id, 1) is not None
+
+
+# --------------------------------------------------------------------------
+# Casting — the voice and tone the renderer reads back
+# --------------------------------------------------------------------------
+
+
+def _cast_entries() -> list[CastEntry]:
+    return [
+        CastEntry(
+            character="ULYSSES",
+            voice_id="Iapetus",
+            voice_name="Iapetus",
+            tone="serious",
+            confidence=0.95,
+            rationale="Nine lines, commanding his crew.",
+        ),
+        # The narrator is keyed by None, the same convention the voice map uses.
+        CastEntry(character=None, voice_id="Charon", voice_name="Charon", tone=None),
+    ]
+
+
+def test_casting_round_trips(repo: Repository):
+    saved = repo.save_casting("proj-1", _cast_entries(), "judge")
+
+    assert saved.id
+    assert saved.project_id == "proj-1"
+    assert saved.source == "judge"
+
+    fetched = repo.get_casting("proj-1")
+    assert fetched == saved
+
+
+def test_casting_missing_returns_none(repo: Repository):
+    assert repo.get_casting("no-such-project") is None
+
+
+def test_casting_preserves_the_narrator_key_and_a_null_tone(repo: Repository):
+    """``None`` must survive the JSON round trip as ``None``, not as "None".
+
+    The narrator is addressed by a null character and an absent tone is a real
+    answer meaning "the text gave no signal" — a string would silently become a
+    character called "None" with an emotion the adapter would reject.
+    """
+    repo.save_casting("proj-1", _cast_entries(), "judge")
+
+    fetched = repo.get_casting("proj-1")
+    assert fetched is not None
+    narrator = fetched.voice_for(None)
+    assert narrator is not None
+    assert narrator.character is None
+    assert narrator.tone is None
+    assert narrator.voice_id == "Charon"
+
+
+def test_casting_floats_survive(repo: Repository):
+    repo.save_casting("proj-1", _cast_entries(), "judge")
+    fetched = repo.get_casting("proj-1")
+    assert fetched is not None
+    assert fetched.voice_for("ULYSSES").confidence == 0.95
+
+
+def test_saving_a_casting_replaces_the_previous_one(repo: Repository):
+    """One casting per project, latest wins — not an append-only log."""
+    repo.save_casting("proj-1", _cast_entries(), "judge")
+    repo.save_casting(
+        "proj-1",
+        [CastEntry(character="ULYSSES", voice_id="Charon", voice_name="Charon")],
+        "manual",
+    )
+
+    fetched = repo.get_casting("proj-1")
+    assert fetched is not None
+    assert len(fetched.entries) == 1
+    assert fetched.source == "manual"
+    assert fetched.voice_for("ULYSSES").voice_id == "Charon"
+
+
+def test_castings_are_isolated_by_project(repo: Repository):
+    repo.save_casting("proj-1", _cast_entries(), "judge")
+    assert repo.get_casting("proj-2") is None

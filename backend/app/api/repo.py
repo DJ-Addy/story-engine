@@ -83,6 +83,53 @@ class VideoRenderRecord(BaseModel):
     source: str  # "image" | "text" — which generation path was taken
 
 
+class CastEntry(BaseModel):
+    """One casting decision: who speaks, in which voice, in what tone.
+
+    ``character`` is ``None`` for the narrator, matching the convention the
+    renderer already uses - a line with no ``character_name`` is narration, and
+    the voice map keys it under ``None``.
+
+    ``tone`` is a value from ``app.nlp.emotion.EMOTIONS`` or ``None``. None is a
+    real answer meaning "the text gave no signal", not a missing field: the TTS
+    adapter accepts ``emotion=None`` and simply does not steer the delivery.
+    """
+
+    character: str | None = None
+    voice_id: str
+    voice_name: str
+    tone: str | None = None
+    confidence: float = 0.0
+    rationale: str = ""
+
+
+class CastingRecord(BaseModel):
+    """The casting a project renders with - one per project, latest wins.
+
+    This exists because the voice-fit judge and the audio renderer used to be
+    two unrelated opinions about the same scene: the judge scored a casting
+    handed to it by the caller and threw it away, while the renderer dealt
+    voices round-robin from the provider catalogue and never saw the judge at
+    all. Persisting the decision is what joins them - the judge writes here and
+    the renderer reads here.
+
+    ``source`` records who decided, so a human override is distinguishable from
+    a machine proposal when both have been applied.
+    """
+
+    id: str
+    project_id: str
+    entries: list[CastEntry]
+    source: str = "judge"
+
+    def voice_for(self, character: str | None) -> CastEntry | None:
+        """The entry for one speaker, or None when this casting does not name it."""
+        for entry in self.entries:
+            if entry.character == character:
+                return entry
+        return None
+
+
 class FindingRecord(BaseModel):
     id: str
     project_id: str
@@ -186,6 +233,15 @@ class Repository(Protocol):
         self, project_id: str, scene_ordinal: int, shot_ordinal: int
     ) -> VideoRenderRecord | None: ...
 
+    # -- casting ---------------------------------------------------------------
+    # The voice and tone decided for each speaker. Written by the casting judge
+    # (or a human overriding it), read by the audio renderer. Absent means the
+    # renderer falls back to dealing voices from the provider's catalogue.
+    def save_casting(
+        self, project_id: str, entries: list[CastEntry], source: str
+    ) -> CastingRecord: ...
+    def get_casting(self, project_id: str) -> CastingRecord | None: ...
+
     # -- shot frames (previz boards) -------------------------------------------
     # A per-shot board/frame image, when the previz pipeline has rendered one.
     # Its presence drives image-to-video vs text-to-video in the video renderer.
@@ -216,6 +272,8 @@ class InMemoryRepository:
         self._video_renders: dict[tuple[str, int, int], VideoRenderRecord] = {}
         # Per-shot previz board/frame image bytes (project, scene, shot).
         self._shot_frames: dict[tuple[str, int, int], bytes] = {}
+        # One (latest) casting per project.
+        self._castings: dict[str, CastingRecord] = {}
 
     # -- users -------------------------------------------------------------
     def create_user(self, email: str, password_hash: str, salt: str) -> UserRecord:
@@ -434,6 +492,22 @@ class InMemoryRepository:
         self, project_id: str, scene_ordinal: int, shot_ordinal: int
     ) -> VideoRenderRecord | None:
         return self._video_renders.get((project_id, scene_ordinal, shot_ordinal))
+
+    # -- casting ---------------------------------------------------------------
+    def save_casting(
+        self, project_id: str, entries: list[CastEntry], source: str
+    ) -> CastingRecord:
+        record = CastingRecord(
+            id=str(uuid4()),
+            project_id=project_id,
+            entries=list(entries),
+            source=source,
+        )
+        self._castings[project_id] = record
+        return record
+
+    def get_casting(self, project_id: str) -> CastingRecord | None:
+        return self._castings.get(project_id)
 
     # -- shot frames (previz boards) -------------------------------------------
     def save_shot_frame(

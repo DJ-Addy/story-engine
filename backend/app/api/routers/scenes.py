@@ -20,7 +20,13 @@ from fastapi import APIRouter, Depends, HTTPException, Response
 
 from app.adapters.base import TTSProvider
 from app.api.deps import get_owned_project, get_repo, get_tts
-from app.api.repo import AudioRenderRecord, FindingRecord, ProjectRecord, Repository
+from app.api.repo import (
+    AudioRenderRecord,
+    CastingRecord,
+    FindingRecord,
+    ProjectRecord,
+    Repository,
+)
 from app.api.schemas import (
     AudioRenderOut,
     FindingOut,
@@ -70,8 +76,10 @@ def _estimate_cost_cents(scene: NormalizedScene, tts: TTSProvider) -> int:
 
 
 async def _voice_map(
-    scene: NormalizedScene, tts: TTSProvider
-) -> dict[str | None, str]:
+    scene: NormalizedScene,
+    tts: TTSProvider,
+    casting: CastingRecord | None = None,
+) -> tuple[dict[str | None, str], dict[str | None, str | None]]:
     """Give the narrator and every speaking character a voice the provider has.
 
     The catalogue comes from the provider, so this cannot name a voice that does
@@ -83,9 +91,18 @@ async def _voice_map(
     from the remaining voices so the narration does not share a voice with a
     character unless the catalogue is too small to avoid it.
 
-    GAP: this is not the casting the studio judged. Nothing persists a casting
-    yet - `app.api.repo` has no place to put one - so the voice-fit scores and
-    the rendered audio are still two separate opinions about the same scene.
+    When the project has a saved ``casting`` it decides: that is the whole point
+    of persisting one. The judge's choice of voice AND tone reaches the render
+    instead of being scored and thrown away, and the two stop being separate
+    opinions about the same scene.
+
+    The catalogue still fills any speaker the casting does not name - a
+    character added to the script after the last casting run should be audible,
+    not silent, and the deal below is deterministic so it stays stable across
+    renders.
+
+    Returns ``(voice_map, tone_map)``; the tone map is empty unless a casting
+    supplied one.
     """
     catalogue = await tts.list_voices()
     if not catalogue:
@@ -108,7 +125,21 @@ async def _voice_map(
     voice_map: dict[str | None, str] = {None: narrator}
     for index, speaker in enumerate(speakers):
         voice_map[speaker] = pool[index % len(pool)]
-    return voice_map
+
+    tone_map: dict[str | None, str | None] = {}
+    if casting is not None:
+        known = {voice.id for voice in catalogue}
+        for entry in casting.entries:
+            # A casting can outlive the provider it was decided against - the
+            # voice pool is the adapter's, and adapters get swapped. Ignoring an
+            # entry the provider no longer publishes keeps the render working on
+            # the catalogue's own voice rather than failing on a name that would
+            # come back 400 from the far end.
+            if entry.voice_id in known:
+                voice_map[entry.character] = entry.voice_id
+            tone_map[entry.character] = entry.tone
+
+    return voice_map, tone_map
 
 
 def _get_scene_or_404(
@@ -290,8 +321,9 @@ async def render_audio(
     # Per-scene knobs the timeline editor wrote; a re-render after an edit is
     # what makes that edit audible.
     settings = repo.get_render_settings(project.id, ordinal)
+    voice_map, tone_map = await _voice_map(scene, tts, repo.get_casting(project.id))
     result, timing = await render_scene_audio_with_timing(
-        scene, await _voice_map(scene, tts), tts, settings=settings
+        scene, voice_map, tts, settings=settings, tone_map=tone_map
     )
     project.cost_spent_cents += estimated_cents
     wav_bytes = await _persist_wav(store, project.id, ordinal, result.wav_bytes)

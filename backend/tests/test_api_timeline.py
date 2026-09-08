@@ -71,7 +71,7 @@ def _expected_timing(sample_fountain):
         # the fake has to be the same one the render uses.
         tts = FakeTTS()
         return await render_scene_audio_with_timing(
-            scene, await _voice_map(scene, tts), tts, seed=7
+            scene, (await _voice_map(scene, tts))[0], tts, seed=7
         )
 
     _result, timing = asyncio.run(_run())

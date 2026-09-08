@@ -165,7 +165,7 @@ class TestVoicesComeFromTheProvider:
         tts = FakeTTS()
         catalogue = {voice.id for voice in await tts.list_voices()}
 
-        mapping = await _voice_map(self._scene(sample_fountain), tts)
+        mapping, _tones = await _voice_map(self._scene(sample_fountain), tts)
 
         assert mapping, "expected at least a narrator"
         unknown = set(mapping.values()) - catalogue
@@ -178,7 +178,7 @@ class TestVoicesComeFromTheProvider:
         from app.api.routers.scenes import _voice_map
 
         tts = FakeTTS()
-        mapping = await _voice_map(self._scene(sample_fountain), tts)
+        mapping, _tones = await _voice_map(self._scene(sample_fountain), tts)
 
         narrator = mapping[None]
         characters = [v for k, v in mapping.items() if k is not None]
@@ -194,7 +194,138 @@ class TestVoicesComeFromTheProvider:
         from app.api.routers.scenes import _voice_map
 
         scene = self._scene(sample_fountain)
-        first = await _voice_map(scene, FakeTTS())
-        second = await _voice_map(scene, FakeTTS())
+        first, _ = await _voice_map(scene, FakeTTS())
+        second, _ = await _voice_map(scene, FakeTTS())
 
         assert first == second
+
+
+class TestCastingReachesTheRender:
+    """A saved casting decides the render — that is the point of saving one.
+
+    The voice-fit judge and the renderer used to be two unrelated opinions
+    about the same scene: the judge scored a casting the caller handed it and
+    discarded it, while the renderer dealt voices round-robin from the provider
+    catalogue and never saw the judge. These pin the join.
+    """
+
+    @staticmethod
+    def _scene(fountain: str):
+        from app.ingest.fountain import parse_fountain
+        from app.ingest.normalize import normalize
+
+        return normalize(parse_fountain(fountain)).scenes[1]
+
+    async def _casting(self, tts, character: str, tone: str | None):
+        from app.api.repo import CastEntry, CastingRecord
+
+        voices = await tts.list_voices()
+        chosen = voices[-1]
+        return CastingRecord(
+            id="c1",
+            project_id="p1",
+            entries=[
+                CastEntry(
+                    character=character,
+                    voice_id=chosen.id,
+                    voice_name=chosen.name,
+                    tone=tone,
+                    confidence=0.9,
+                    rationale="test",
+                )
+            ],
+            source="judge",
+        ), chosen
+
+    async def test_casting_voice_overrides_the_round_robin_deal(
+        self, sample_fountain: str
+    ) -> None:
+        from app.adapters.fake import FakeTTS
+        from app.api.routers.scenes import _voice_map
+
+        tts = FakeTTS()
+        scene = self._scene(sample_fountain)
+        speaker = next(
+            line.character_name
+            for line in scene.lines
+            if line.kind == "dialogue" and line.character_name
+        )
+        dealt, _ = await _voice_map(scene, tts)
+
+        # Deliberately cast a voice the round-robin did NOT choose, so the
+        # assertion below proves the casting decided rather than coinciding.
+        catalogue = await tts.list_voices()
+        other = next(v for v in catalogue if v.id != dealt[speaker])
+        casting, _chosen = await self._casting(tts, speaker, "urgent")
+        casting.entries[0].voice_id = other.id
+        casting.entries[0].voice_name = other.name
+
+        cast, tones = await _voice_map(scene, tts, casting)
+
+        assert dealt[speaker] != other.id
+        assert cast[speaker] == other.id
+        assert tones[speaker] == "urgent"
+
+    async def test_speakers_the_casting_omits_still_get_a_voice(
+        self, sample_fountain: str
+    ) -> None:
+        """A character added after the last casting run must not be silent."""
+        from app.adapters.fake import FakeTTS
+        from app.api.routers.scenes import _voice_map
+
+        tts = FakeTTS()
+        scene = self._scene(sample_fountain)
+        casting, _ = await self._casting(tts, "SOMEONE-NOT-IN-THIS-SCENE", "calm")
+
+        mapping, _tones = await _voice_map(scene, tts, casting)
+
+        catalogue = {voice.id for voice in await tts.list_voices()}
+        speakers = {
+            line.character_name
+            for line in scene.lines
+            if line.kind == "dialogue" and line.character_name
+        }
+        for speaker in speakers:
+            assert mapping[speaker] in catalogue
+        assert mapping[None] in catalogue
+
+    async def test_a_voice_the_provider_no_longer_has_is_ignored(
+        self, sample_fountain: str
+    ) -> None:
+        """A casting outlives the adapter it was decided against.
+
+        Honouring a stale voice id would send the render a name the provider
+        answers 400 to; falling back to the catalogue keeps it working.
+        """
+        from app.adapters.fake import FakeTTS
+        from app.api.repo import CastEntry, CastingRecord
+        from app.api.routers.scenes import _voice_map
+
+        tts = FakeTTS()
+        scene = self._scene(sample_fountain)
+        speaker = next(
+            line.character_name
+            for line in scene.lines
+            if line.kind == "dialogue" and line.character_name
+        )
+        stale = CastingRecord(
+            id="c1",
+            project_id="p1",
+            entries=[
+                CastEntry(
+                    character=speaker,
+                    voice_id="en-US-AriaNeural",  # the Edge name that broke production
+                    voice_name="Aria",
+                    tone="sad",
+                )
+            ],
+            source="judge",
+        )
+
+        mapping, tones = await _voice_map(scene, tts, stale)
+
+        catalogue = {voice.id for voice in await tts.list_voices()}
+        assert mapping[speaker] in catalogue
+        assert mapping[speaker] != "en-US-AriaNeural"
+        # The tone is still honoured: only the voice id went stale.
+        assert tones[speaker] == "sad"

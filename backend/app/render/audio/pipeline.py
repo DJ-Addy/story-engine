@@ -129,12 +129,13 @@ async def render_scene_audio(
     tts: TTSProvider,
     seed: int = 7,
     settings: SceneRenderSettings | None = None,
+    tone_map: dict[str | None, str | None] | None = None,
 ) -> SceneRenderResult:
     """Render a scene to a mixed WAV. Backward-compatible thin wrapper around
     :func:`render_scene_audio_with_timing` that discards the timing payload; the
     audio bytes are byte-identical to that function's (same code path)."""
     result, _timing = await render_scene_audio_with_timing(
-        scene, voice_map, tts, seed, settings
+        scene, voice_map, tts, seed, settings, tone_map
     )
     return result
 
@@ -145,6 +146,7 @@ async def render_scene_audio_with_timing(
     tts: TTSProvider,
     seed: int = 7,
     settings: SceneRenderSettings | None = None,
+    tone_map: dict[str | None, str | None] | None = None,
 ) -> tuple[SceneRenderResult, SceneTiming]:
     """Render a scene AND expose the per-clip placement used to build it.
 
@@ -154,6 +156,13 @@ async def render_scene_audio_with_timing(
 
     ``settings`` carries the timeline editor's per-scene knobs (pacing, ambience
     duck). Omitting it, or passing defaults, renders exactly as before.
+
+    ``tone_map`` is the casting's per-speaker default tone, keyed like
+    ``voice_map`` (``None`` for the narrator). A line's own emotion always wins:
+    a parenthetical is the writer being specific about one line, while a casting
+    is a standing decision about a character, and the specific instruction should
+    not be overwritten by the general one. The casting fills the silence where
+    ingest found no cue - which, for a converted novel, is every line.
     """
     settings = settings or DEFAULT_RENDER_SETTINGS
     lines = spoken_lines(scene)
@@ -169,11 +178,16 @@ async def render_scene_audio_with_timing(
                 jitter=True,
             )
 
+    tones = tone_map or {}
     tasks = []
     for line in lines:
         speaker = line.character_name if line.kind == "dialogue" else None
         voice_id = voice_map.get(speaker, voice_map[None])
-        tasks.append(synthesize(line.text, voice_id, line.emotion))
+        # The script's own cue beats the casting's standing choice; see the
+        # docstring. `or` is correct rather than a membership test because an
+        # emotion of None and an absent one mean the same thing here: no cue.
+        emotion = line.emotion or tones.get(speaker)
+        tasks.append(synthesize(line.text, voice_id, emotion))
     results = await asyncio.gather(*tasks)
 
     sample_arrays = [_clip_samples(result) for result in results]

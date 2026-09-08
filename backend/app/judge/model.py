@@ -59,6 +59,68 @@ class VoiceFitResult(BaseModel):
 
 
 # --------------------------------------------------------------------------- #
+# Casting proposer (voice + tone)
+# --------------------------------------------------------------------------- #
+# Where a proposed tone came from, and therefore how far it can be trusted:
+# "emotion_tags" — the writer wrote the delivery down and ingest captured it
+# (a screenplay parenthetical); "text_cues" — it was read off the words of the
+# line itself; "none" — there was no evidence, so no tone is proposed at all.
+ToneEvidence = Literal["emotion_tags", "text_cues", "none"]
+
+
+class CastingProposalEntry(BaseModel):
+    """One proposed part: who speaks it, in which voice, in what tone.
+
+    ``character is None`` **is** the narrator, deliberately the same sentinel
+    the render path already uses (``app.render.audio.timing.speaker_of``
+    returns ``None`` for the action and narration a narrator reads), so a
+    proposal drops into a voice map without translation. ``is_narrator`` states
+    it in the open for consumers that would rather not read a null as a name.
+
+    ``confidence`` rates the *tone*, not the voice, and is exactly 0.0 when
+    ``tone is None`` — a part with no tonal evidence has nothing to be
+    confident about, and a number invented to fill the field would be the one
+    part of this model a director could not check. The voice choice carries its
+    own number in ``voice_fit`` (the deterministic fit score from
+    :mod:`app.judge.voices`), so the two can be weighed separately instead of
+    blended into one figure that hides which half was weak.
+    """
+
+    character: str | None = None
+    is_narrator: bool = False
+    voice_id: str
+    voice_name: str
+    tone: str | None = None
+    tone_evidence: ToneEvidence = "none"
+    confidence: float = Field(ge=0.0, le=1.0)
+    voice_fit: float = Field(ge=0.0, le=1.0)
+    line_count: int = 0
+    rationale: str
+
+
+class CastingProposal(BaseModel):
+    """A whole proposed cast: the narrator first, then every character.
+
+    Characters follow in casting order (most dialogue first, ties by name),
+    which is the order the voices were dealt in — reading the list top to
+    bottom is reading the reasoning in the order it happened.
+    """
+
+    entries: list[CastingProposalEntry] = Field(default_factory=list)
+    rationale: str = ""
+
+    def as_casting(self) -> dict[str, str]:
+        """Character name -> voice id, with the narrator left out.
+
+        The shape the rest of the system already speaks (``app.agents.tools``'
+        working casting, the scene renderer's voice map), so a proposal can be
+        handed straight to the voice-fit judge or to a render without any
+        consumer needing to know this model.
+        """
+        return {e.character: e.voice_id for e in self.entries if e.character is not None}
+
+
+# --------------------------------------------------------------------------- #
 # Animatic / shot-list judge
 # --------------------------------------------------------------------------- #
 class AnimaticFinding(BaseModel):

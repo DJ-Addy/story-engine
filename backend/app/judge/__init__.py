@@ -1,24 +1,30 @@
 """AI judge / evaluation layer for Story Engine.
 
-Two deterministic judges that score IR-derived material against the story's
-needs and return structured, actionable results (score + rationale + concrete
-findings + suggestions), not just a number:
+Deterministic, offline evaluation of IR-derived material against the story's
+needs. Everything here returns a structured, actionable result (score or
+proposal + rationale + concrete findings + suggestions), never just a number:
 
 * ``app.judge.voices``   — voice-fit judge (casting vs. character needs).
+* ``app.judge.casting``  — casting proposer: the voice *and* the delivery tone
+  each part should get, decided from the script before any credit is spent.
 * ``app.judge.animatic`` — previz shot-list / animatic quality judge.
 
-Both judges compute a deterministic heuristic over the IR (and, for the
-animatic judge, reuse the existing continuity + coverage checks rather than
-reinventing them). Each exposes a clean, optional seam for a richer
+Each module computes a deterministic heuristic over the IR, reusing what the
+project already ships rather than reinventing it (the animatic judge leans on
+the continuity + coverage checks; the proposer on the voice judge's own signal
+extraction). Both judges expose a clean, optional seam for a richer
 rubric-based evaluation by an injected ``LLMProvider`` (see ``app.adapters``);
 the LLM is never required — it defaults to ``None`` and the heuristic is what
 the tests exercise, keeping the feature fully offline and deterministic.
 """
 
 from app.judge.animatic import judge_animatic
+from app.judge.casting import propose_casting_with_tone
 from app.judge.model import (
     AnimaticFinding,
     AnimaticJudgment,
+    CastingProposal,
+    CastingProposalEntry,
     CharacterVoiceFit,
     RankedEntry,
     RankingResult,
@@ -39,6 +45,8 @@ __all__ = [
     "AnimaticCandidate",
     "AnimaticFinding",
     "AnimaticJudgment",
+    "CastingProposal",
+    "CastingProposalEntry",
     "CharacterVoiceFit",
     "RankedEntry",
     "RankingResult",
@@ -49,6 +57,7 @@ __all__ = [
     "VoiceSuggestion",
     "judge_animatic",
     "judge_voice_fit",
+    "propose_casting_with_tone",
     "rank_animatics",
     "rank_voice_fits",
 ]

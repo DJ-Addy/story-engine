@@ -612,6 +612,28 @@ class StoredRenderSettings(Base):
     updated_at: Mapped[datetime] = _touched_at()
 
 
+class StoredCasting(Base):
+    """``app.api.repo.CastingRecord`` - latest per project.
+
+    Stored whole, as a JSON list of entries, rather than a row per character.
+    The casting is only ever read and written as one decision: the renderer
+    asks for the project's casting and walks it, and a judge that recasts one
+    character re-emits the set. A row per character would buy per-character
+    updates nothing here and cost a join on the render path.
+    """
+
+    __tablename__ = "store_castings"
+    __table_args__ = (
+        UniqueConstraint("project_id", name="uq_store_castings_project"),
+    )
+
+    id: Mapped[str] = _text_pk()
+    project_id: Mapped[str] = mapped_column(Text, nullable=False)
+    entries: Mapped[list[Any]] = mapped_column(_JSON, nullable=False)
+    source: Mapped[str] = mapped_column(Text, nullable=False)
+    updated_at: Mapped[datetime] = _touched_at()
+
+
 class StoredVideoRender(Base):
     """``app.api.repo.VideoRenderRecord`` - latest per (project, scene, shot).
 
@@ -678,4 +700,5 @@ STORE_TABLES = [
     StoredRenderSettings.__table__,
     StoredVideoRender.__table__,
     StoredShotFrame.__table__,
+    StoredCasting.__table__,
 ]
