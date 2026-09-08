@@ -9,6 +9,7 @@ placeholder tone of the reported duration so tests stay meaningful.
 from __future__ import annotations
 
 import asyncio
+import os
 
 import numpy as np
 from pydantic import BaseModel, ConfigDict
@@ -29,7 +30,35 @@ from app.render.audio.model import (
 )
 from app.render.audio.timing import plan_speech_bus, speech_clips, spoken_lines
 
-_CONCURRENCY = 4
+
+def _env_int(name: str, default: int, *, minimum: int) -> int:
+    """An int from the environment, ignoring anything unusable."""
+    try:
+        return max(minimum, int(os.environ[name]))
+    except (KeyError, ValueError):
+        return default
+
+
+def _env_float(name: str, default: float, *, minimum: float) -> float:
+    try:
+        return max(minimum, float(os.environ[name]))
+    except (KeyError, ValueError):
+        return default
+
+# Synthesis concurrency and retry budget, both tunable because the right values
+# depend on the provider's quota rather than on anything in this file.
+#
+# The defaults are sized for a *per-minute* quota, not a transient blip. A new
+# Vertex project's Gemini-TTS allowance is small, and a scene is dozens of
+# calls: rendering the Odyssey scene returned
+# `Quota exceeded for ...global_generate_content_requests_per_minute...`, and
+# the previous budget - three attempts, 0.5s base - gave up 1.5 seconds into a
+# limit that resets after sixty. Five retries from a 2s base wait about a
+# minute in total, which is the window that actually matters, and jitter keeps
+# a batch from retrying in lockstep.
+_CONCURRENCY = _env_int("STORY_ENGINE_TTS_CONCURRENCY", 4, minimum=1)
+_TTS_MAX_ATTEMPTS = _env_int("STORY_ENGINE_TTS_MAX_ATTEMPTS", 6, minimum=1)
+_TTS_BASE_DELAY_S = _env_float("STORY_ENGINE_TTS_BASE_DELAY_S", 2.0, minimum=0.0)
 _AMBIENCE_BASE_S = 20.0  # synth this much bed, then loop to scene length
 _TAIL_MS = SPEECH_TAIL_MS  # let the ambience breathe after the last line
 
@@ -134,7 +163,10 @@ async def render_scene_audio_with_timing(
     async def synthesize(text: str, voice_id: str, emotion: str | None) -> TTSResult:
         async with semaphore:
             return await run_with_retries(
-                lambda: tts.synthesize(text, voice_id, emotion, {}), base_delay_s=0.5
+                lambda: tts.synthesize(text, voice_id, emotion, {}),
+                max_attempts=_TTS_MAX_ATTEMPTS,
+                base_delay_s=_TTS_BASE_DELAY_S,
+                jitter=True,
             )
 
     tasks = []

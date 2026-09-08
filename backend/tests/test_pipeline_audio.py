@@ -264,3 +264,62 @@ async def test_line_emotion_reaches_tts_provider() -> None:
 
     assert result.clip_count == 2
     assert set(tts.calls) == {("Get out now.", "angry"), ("Fine.", None)}
+
+
+class TestRetryBudgetOutlastsAPerMinuteQuota:
+    """A quota that resets per minute needs a retry window measured in minutes.
+
+    Rendering a real scene returned `Quota exceeded for
+    ...global_generate_content_requests_per_minute_per_project_per_base_model`.
+    The budget then was three attempts from a 0.5s base — it gave up about 1.5
+    seconds into a limit that clears after sixty, so every retry landed inside
+    the same exhausted window and the render surfaced a 502.
+    """
+
+    @staticmethod
+    def _worst_case_wait(attempts: int, base: float) -> float:
+        """Total backoff across all retries, matching run_with_retries."""
+        return sum(base * (2**i) for i in range(attempts - 1))
+
+    def test_default_budget_spans_at_least_a_minute(self) -> None:
+        from app.render.audio import pipeline
+
+        waited = self._worst_case_wait(
+            pipeline._TTS_MAX_ATTEMPTS, pipeline._TTS_BASE_DELAY_S
+        )
+        assert waited >= 60.0, (
+            f"retry window is {waited:.1f}s; a per-minute quota needs at least 60s"
+        )
+
+    def test_budget_is_tunable(self, monkeypatch) -> None:
+        """The right values depend on the provider's quota, not on this file."""
+        import importlib
+
+        from app.render.audio import pipeline
+
+        monkeypatch.setenv("STORY_ENGINE_TTS_CONCURRENCY", "1")
+        monkeypatch.setenv("STORY_ENGINE_TTS_MAX_ATTEMPTS", "9")
+        monkeypatch.setenv("STORY_ENGINE_TTS_BASE_DELAY_S", "3.5")
+        reloaded = importlib.reload(pipeline)
+        try:
+            assert reloaded._CONCURRENCY == 1
+            assert reloaded._TTS_MAX_ATTEMPTS == 9
+            assert reloaded._TTS_BASE_DELAY_S == 3.5
+        finally:
+            monkeypatch.undo()
+            importlib.reload(pipeline)
+
+    def test_unusable_values_fall_back_to_the_default(self, monkeypatch) -> None:
+        import importlib
+
+        from app.render.audio import pipeline
+
+        monkeypatch.setenv("STORY_ENGINE_TTS_CONCURRENCY", "not-a-number")
+        monkeypatch.setenv("STORY_ENGINE_TTS_MAX_ATTEMPTS", "0")
+        reloaded = importlib.reload(pipeline)
+        try:
+            assert reloaded._CONCURRENCY == 4, "garbage should not disable concurrency"
+            assert reloaded._TTS_MAX_ATTEMPTS >= 1, "zero attempts renders nothing"
+        finally:
+            monkeypatch.undo()
+            importlib.reload(pipeline)
