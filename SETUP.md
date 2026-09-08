@@ -150,8 +150,7 @@ budgeting a render run — and reconcile against the billing console after.
 
 ## 4. Install the SDK
 
-**`gcloud` is not installed on this machine** — nothing in DEPLOY.md will run
-until it is. Get it from
+Nothing in DEPLOY.md runs without the CLI. Get it from
 [cloud.google.com/sdk/docs/install](https://cloud.google.com/sdk/docs/install),
 then:
 
@@ -163,6 +162,12 @@ gcloud billing projects describe YOUR_PROJECT_ID   # confirm billing is attached
 
 If that last command reports `billingEnabled: false`, attach a billing account
 in the console before going further; every step below will fail without it.
+
+On Windows the installer adds its `bin` directory to the **user** PATH, so a
+terminal that was already open when you installed will not find `gcloud` — and
+neither will an editor started before the install, since its integrated
+terminal inherits the editor's environment. Restart the shell, or the editor,
+rather than concluding the install failed.
 
 ---
 

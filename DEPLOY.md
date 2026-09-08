@@ -15,7 +15,8 @@ selected and billing is attached to it.
 gcloud config set project YOUR_PROJECT_ID
 gcloud services enable run.googleapis.com aiplatform.googleapis.com \
     texttospeech.googleapis.com storage.googleapis.com \
-    artifactregistry.googleapis.com cloudbuild.googleapis.com
+    artifactregistry.googleapis.com cloudbuild.googleapis.com \
+    secretmanager.googleapis.com
 ```
 
 ## 2. Service account
