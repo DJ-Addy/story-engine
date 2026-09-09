@@ -49,27 +49,29 @@ export function useTimelineAudio() {
       sceneOrdinal === null ||
       timingSource !== "rendered"
     ) {
-      engine.load(null);
+      void engine.load(null);
       setAudioAvailable(false);
       return;
     }
     let cancelled = false;
     getSceneAudio(projectId, sceneOrdinal)
-      .then((src) => {
+      .then(async (src) => {
         if (cancelled) {
           if (src) URL.revokeObjectURL(src);
           return;
         }
-        engine.load(src);
-        setAudioAvailable(src !== null);
-        // If the transport is already rolling (a reload mid-play), catch up.
+        // The engine decodes the whole mix before reporting it playable, so
+        // "sound" on the transport bar means sound, not a pending fetch.
+        const ok = await engine.load(src);
+        if (cancelled) return;
+        setAudioAvailable(ok);
         const s = useTimelineStore.getState();
         engine.syncTime(s.currentMs);
-        if (s.isPlaying && !s.muted) engine.playBed();
+        if (ok && s.isPlaying) engine.playBed();
       })
       .catch(() => {
         if (cancelled) return;
-        engine.load(null);
+        void engine.load(null);
         setAudioAvailable(false);
       });
     return () => {

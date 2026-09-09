@@ -1,59 +1,98 @@
-// The timeline's sound: the rendered scene mix, played through one <audio>
-// element that FOLLOWS the transport clock.
+// The timeline's sound: the rendered scene mix, decoded once with Web Audio
+// and played from wherever the transport clock says.
 //
-// This replaced a procedural placeholder synth — a low oscillator bed and a
-// blip on every SFX marker — that had been left in as a "seam" to close later.
-// It was never closed: a scene could be rendered to a 4-minute, 35-clip WAV on
-// the server and the workspace would still play a drone, muted by default, so
-// the one thing a listener came for was the one thing they never heard.
+// This replaced two earlier engines. The first was a procedural placeholder —
+// an oscillator bed and a blip per SFX marker — left in behind a "seam" note
+// and never swapped, so a rendered scene played a drone, muted. The second
+// was a plain <audio> element fed the mix as a blob URL, which is the obvious
+// design and did not work: in the browser it was tested in, the element sat
+// at NETWORK_LOADING with readyState 0 and never fired loadedmetadata for a
+// valid 11.8 MB PCM WAV — detached or attached to the document — while
+// `decodeAudioData` decoded the same bytes in well under a second. A player
+// whose loading a browser may defer is not a player a demo can depend on.
+//
+// Web Audio has no such deferral. The whole mix is decoded into an
+// AudioBuffer up front (a four-minute mono scene at 48 kHz is ~45 MB of
+// floats, which is fine), and playback is a BufferSource started at an
+// offset. Seeking is therefore trivial and exact: stop the source, start a
+// new one at the new offset.
+//
+// THE CLOCK STAYS IN THE STORE. Every tick calls `syncTime`; if the audio's
+// own position has drifted from the transport by more than the tolerance it
+// is restarted at the transport's position. The audio never writes time back,
+// so scrubbing, the playhead and the picture all read one clock.
 //
 // The method names are kept from the placeholder (`resume`, `setMuted`,
 // `playBed`, `stopBed`, `blip`, `dispose`) so `useTransportClock` and the
 // transport bar did not have to change. `blip` is a no-op: the SFX are baked
-// into the mix, and layering a synthesized click over a real footstep would be
-// the placeholder leaking back in.
-//
-// THE CLOCK STAYS IN THE STORE. The element is seeked to `currentMs` when it
-// drifts, and never writes time back — the same rule the program monitor
-// follows — so scrubbing, the playhead and the video all read one clock. The
-// cost is that the audio may be re-seeked a few times a second while playing if
-// the browser's clock and rAF disagree; the tolerance below keeps that
-// inaudible.
+// into the mix.
 
-/** How far the element may drift from the transport before it is re-seeked.
- * Wide enough that normal rAF jitter never triggers it; tight enough that a
- * seek is heard as a seek and not as lag. */
+/** How far playback may drift from the transport before it is restarted at
+ * the transport's position. rAF jitter never reaches this; a real seek does. */
 const SEEK_TOLERANCE_S = 0.18;
 
-export class TimelineAudioEngine {
-  private el: HTMLAudioElement | null = null;
-  private muted = false;
-  private src: string | null = null;
-  private srcIsObjectUrl = false;
-  /** Whether the transport wants sound right now (playBed/stopBed). */
-  private wantPlaying = false;
+type AudioContextCtor = typeof AudioContext;
 
-  /** Lazily create the element. Returns null with no DOM (SSR). */
-  private ensure(): HTMLAudioElement | null {
-    if (this.el) return this.el;
+export interface TimelineAudioDiagnostics {
+  loaded: boolean;
+  durationS: number | null;
+  playing: boolean;
+  muted: boolean;
+  contextState: string | null;
+  positionS: number;
+}
+
+export class TimelineAudioEngine {
+  private ctx: AudioContext | null = null;
+  private master: GainNode | null = null;
+  private buffer: AudioBuffer | null = null;
+  private source: AudioBufferSourceNode | null = null;
+  private muted = false;
+  /** The object URL the buffer came from, released on replace/dispose. */
+  private src: string | null = null;
+  /** Transport intent: play or pause, independent of whether a buffer exists
+   * yet — a mix that finishes decoding while the transport is rolling should
+   * start on its own. */
+  private wantPlaying = false;
+  /** Where the transport is, in seconds, as of the last sync. */
+  private transportS = 0;
+  /** ctx.currentTime when the current source started, and the buffer offset it
+   * started from — together they give the audio's own position. */
+  private startedAtCtx = 0;
+  private startedAtOffset = 0;
+  /** Generation counter so a stale decode cannot install itself over a newer
+   * load (scene switches faster than a 12 MB fetch resolves). */
+  private generation = 0;
+
+  private ensure(): AudioContext | null {
+    if (this.ctx) return this.ctx;
     if (typeof window === "undefined") return null;
-    const el = new Audio();
-    el.preload = "auto";
-    el.muted = this.muted;
-    this.el = el;
-    // The element is never attached to the DOM, so nothing can inspect it.
-    // Exposed for diagnosis ("is the mix loaded? is it playing?") — the
-    // answer to "the Odyssey has no sound" should be readable, not inferred.
-    (window as unknown as { __timelineAudio?: HTMLAudioElement }).__timelineAudio = el;
-    return el;
+    const Ctor: AudioContextCtor | undefined =
+      window.AudioContext ??
+      (window as unknown as { webkitAudioContext?: AudioContextCtor }).webkitAudioContext;
+    if (!Ctor) return null;
+    const ctx = new Ctor();
+    const master = ctx.createGain();
+    master.gain.value = this.muted ? 0 : 1;
+    master.connect(ctx.destination);
+    this.ctx = ctx;
+    this.master = master;
+    // Never attached to the DOM, so nothing could inspect it. Exposed for
+    // diagnosis: "the Odyssey has no sound" should be a question with a
+    // readable answer, not an inferred one.
+    (window as unknown as { __timelineAudio?: () => TimelineAudioDiagnostics }).__timelineAudio =
+      () => this.diagnostics();
+    return ctx;
   }
 
-  /** Point the element at a rendered mix (an object URL from the API, or null
-   * when the scene has no render). Replacing the source releases the previous
-   * object URL, so a scene switch does not leak the last scene's WAV. */
-  load(src: string | null, srcIsObjectUrl = true): void {
-    if (this.src === src) return;
-    if (this.srcIsObjectUrl && this.src) {
+  /** Fetch and decode a rendered mix from an object URL the caller owns; the
+   * engine takes over releasing it. Resolves true when the mix is playable.
+   * `null` clears the current mix. */
+  async load(src: string | null): Promise<boolean> {
+    if (this.src === src && (src === null || this.buffer)) return this.buffer !== null;
+    const generation = ++this.generation;
+    this.stopSource();
+    if (this.src) {
       try {
         URL.revokeObjectURL(this.src);
       } catch {
@@ -61,70 +100,73 @@ export class TimelineAudioEngine {
       }
     }
     this.src = src;
-    this.srcIsObjectUrl = srcIsObjectUrl && src !== null;
-    const el = this.ensure();
-    if (!el) return;
-    el.pause();
-    if (src) {
-      el.src = src;
-      el.load();
-    } else {
-      el.removeAttribute("src");
-      el.load();
+    this.buffer = null;
+    if (!src) return false;
+    const ctx = this.ensure();
+    if (!ctx) return false;
+    try {
+      const bytes = await (await fetch(src)).arrayBuffer();
+      const decoded = await ctx.decodeAudioData(bytes);
+      if (generation !== this.generation) return false; // superseded
+      this.buffer = decoded;
+      if (this.wantPlaying) this.startAt(this.transportS);
+      return true;
+    } catch {
+      if (generation === this.generation) this.buffer = null;
+      return false;
     }
   }
 
-  /** True when there is a real mix to play. The transport bar uses this to
-   * label the mute button honestly ("no render" rather than "muted"). */
   hasSource(): boolean {
-    return this.src !== null;
+    return this.buffer !== null;
   }
 
-  /** Must be called from a user gesture (Play / unmute). Browsers gate audio
-   * playback behind a gesture; the element's own play() is what unlocks it. */
+  /** Call from a user gesture (Play / unmute): browsers keep a context
+   * suspended until one, and resuming is what lets sound out. */
   async resume(): Promise<void> {
-    const el = this.ensure();
-    if (!el || !this.src) return;
-    if (!this.wantPlaying) return;
-    try {
-      await el.play();
-    } catch {
-      // Autoplay policy refused: the next gesture will succeed.
+    const ctx = this.ensure();
+    if (!ctx) return;
+    if (ctx.state === "suspended") {
+      try {
+        await ctx.resume();
+      } catch {
+        // The next gesture will succeed.
+      }
     }
   }
 
   setMuted(muted: boolean): void {
     this.muted = muted;
-    if (this.el) this.el.muted = muted;
+    if (this.ctx && this.master) {
+      this.master.gain.setTargetAtTime(muted ? 0 : 1, this.ctx.currentTime, 0.02);
+    }
   }
 
   /** Transport started. */
   playBed(): void {
     this.wantPlaying = true;
-    const el = this.ensure();
-    if (!el || !this.src) return;
-    if (el.paused) el.play().catch(() => {});
+    if (!this.buffer) return;
+    void this.resume();
+    this.startAt(this.transportS);
   }
 
   /** Transport paused or stopped. */
   stopBed(): void {
     this.wantPlaying = false;
-    if (this.el && !this.el.paused) this.el.pause();
+    this.stopSource();
   }
 
-  /** Keep the element on the transport clock. Called on every clock tick and
-   * on every seek; cheap when nothing has drifted. */
+  /** Keep playback on the transport clock. Called on every tick and every
+   * scrub; cheap when nothing has drifted. */
   syncTime(currentMs: number): void {
-    const el = this.el;
-    if (!el || !this.src) return;
-    const target = Math.max(0, currentMs / 1000);
-    if (Math.abs(el.currentTime - target) > SEEK_TOLERANCE_S) {
-      try {
-        el.currentTime = target;
-      } catch {
-        // Metadata not loaded yet; the next tick retries.
-      }
+    this.transportS = Math.max(0, currentMs / 1000);
+    if (!this.buffer || !this.wantPlaying) return;
+    if (!this.source) {
+      this.startAt(this.transportS);
+      return;
     }
+    const drift = Math.abs(this.positionS() - this.transportS);
+    if (drift > SEEK_TOLERANCE_S) this.startAt(this.transportS);
   }
 
   /** SFX markers are already in the mix. Kept so the clock's call site is
@@ -133,7 +175,59 @@ export class TimelineAudioEngine {
 
   dispose(): void {
     this.stopBed();
-    this.load(null);
-    this.el = null;
+    void this.load(null);
+    if (this.ctx) {
+      void this.ctx.close().catch(() => {});
+      this.ctx = null;
+      this.master = null;
+    }
+  }
+
+  diagnostics(): TimelineAudioDiagnostics {
+    return {
+      loaded: this.buffer !== null,
+      durationS: this.buffer ? +this.buffer.duration.toFixed(2) : null,
+      playing: this.source !== null,
+      muted: this.muted,
+      contextState: this.ctx?.state ?? null,
+      positionS: +this.positionS().toFixed(2),
+    };
+  }
+
+  // --- internals ------------------------------------------------------------ //
+
+  private positionS(): number {
+    if (!this.ctx || !this.source) return this.transportS;
+    return this.startedAtOffset + (this.ctx.currentTime - this.startedAtCtx);
+  }
+
+  private startAt(offsetS: number): void {
+    const ctx = this.ensure();
+    if (!ctx || !this.master || !this.buffer) return;
+    this.stopSource();
+    if (offsetS >= this.buffer.duration) return; // past the end: silence
+    const source = ctx.createBufferSource();
+    source.buffer = this.buffer;
+    source.connect(this.master);
+    source.onended = () => {
+      if (this.source === source) this.source = null;
+    };
+    source.start(0, offsetS);
+    this.source = source;
+    this.startedAtCtx = ctx.currentTime;
+    this.startedAtOffset = offsetS;
+  }
+
+  private stopSource(): void {
+    const source = this.source;
+    if (!source) return;
+    this.source = null;
+    try {
+      source.onended = null;
+      source.stop();
+    } catch {
+      // Already stopped.
+    }
+    source.disconnect();
   }
 }
