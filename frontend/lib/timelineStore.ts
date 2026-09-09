@@ -67,6 +67,37 @@ const IDLE_VIDEO: ShotVideoState = {
   startedAt: null,
 };
 
+// --------------------------------------------------------------------------- //
+// Storyboards. The monitor has two modes: `animatic` shows the shot's drawn
+// frame cut to the audio; `video` shows a Veo render. They are separate
+// per-shot maps because they have separate lifecycles and separate costs — a
+// board is cents and seconds, a clip is dollars and a minute — and the editor
+// must be able to say which of the two exists without conflating them.
+// --------------------------------------------------------------------------- //
+
+export type MonitorMode = "animatic" | "video";
+
+export type ShotBoardStatus = "unknown" | "probing" | "none" | "rendering" | "ready" | "error";
+
+export interface ShotBoardState {
+  status: ShotBoardStatus;
+  /** Object URL of the frame (owned by the store; revoked on replace/clear). */
+  src: string | null;
+  error: string | null;
+}
+
+const IDLE_BOARD: ShotBoardState = { status: "unknown", src: null, error: null };
+
+function revokeBoard(state: ShotBoardState | undefined): void {
+  if (state?.src) {
+    try {
+      URL.revokeObjectURL(state.src);
+    } catch {
+      // Already released.
+    }
+  }
+}
+
 /** Free a blob URL created by `getShotVideo`. Safe to call on any state. */
 function revokeShotVideo(state: ShotVideoState | undefined): void {
   const v = state?.video;
@@ -88,12 +119,23 @@ interface TimelineState {
   /** Zoom: pixels per second of timeline. */
   pxPerSecond: number;
   selection: TimelineSelection | null;
-  /** Placeholder audio is muted by default so the page is silent-safe. */
+  /** Whether the listener wants sound. Off is an explicit choice now, not the
+   * default: the timeline plays the rendered mix, and a demo that opens muted
+   * is a demo where nobody hears the render. Play still needs a click, which
+   * is the gesture browsers require anyway. */
   muted: boolean;
+  /** True once a rendered mix has been fetched for the loaded scene. The
+   * transport bar uses it to say "no render" instead of "muted" when there is
+   * simply nothing to play. */
+  audioAvailable: boolean;
   appliedEdits: string[];
 
   /** Per-shot video lifecycle, keyed by `videoKey(scene, shot)`. */
   videos: Record<string, ShotVideoState>;
+  /** Per-shot storyboard frame, keyed the same way. */
+  boards: Record<string, ShotBoardState>;
+  /** What the program monitor shows for the shot under the playhead. */
+  monitorMode: MonitorMode;
 
   load(data: TimelineData): void;
   play(): void;
@@ -110,6 +152,7 @@ interface TimelineState {
   selectAndSeek(sel: TimelineSelection): void;
   setMuted(muted: boolean): void;
   toggleMuted(): void;
+  setAudioAvailable(available: boolean): void;
   applyAiEdit(editId: string): void;
 
   /** Read one shot's video state; never undefined. */
@@ -122,6 +165,13 @@ interface TimelineState {
   ): void;
   /** Release every blob URL held by the map (unmount / reload). */
   clearVideos(): void;
+  boardState(sceneOrdinal: number, shotOrdinal: number): ShotBoardState;
+  setBoardState(
+    sceneOrdinal: number,
+    shotOrdinal: number,
+    next: Partial<ShotBoardState> & { status: ShotBoardStatus },
+  ): void;
+  setMonitorMode(mode: MonitorMode): void;
   /** Drop the loaded timeline entirely (the workspace switching scenes), so no
    * stale lanes are shown against the new scene. Releases blob URLs like
    * `load` does — every path out of a loaded timeline frees its object URLs. */
@@ -172,13 +222,17 @@ export const useTimelineStore = create<TimelineState>((set, get) => ({
   isPlaying: false,
   pxPerSecond: ZOOM_DEFAULT,
   selection: null,
-  muted: true,
+  muted: false,
+  audioAvailable: false,
   appliedEdits: [],
   videos: {},
+  boards: {},
+  monitorMode: "animatic",
 
   load(data) {
     // A reload invalidates every cached clip; release the blob URLs first.
     for (const state of Object.values(get().videos)) revokeShotVideo(state);
+    for (const state of Object.values(get().boards)) revokeBoard(state);
     set({
       data: cloneTimeline(data),
       durationMs: data.durationMs,
@@ -188,7 +242,9 @@ export const useTimelineStore = create<TimelineState>((set, get) => ({
       selection: null,
       appliedEdits: [],
       videos: {},
-      // `muted` is intentionally preserved across loads (default true).
+      boards: {},
+      audioAvailable: false,
+      // `muted` is intentionally preserved across loads.
     });
   },
 
@@ -245,6 +301,9 @@ export const useTimelineStore = create<TimelineState>((set, get) => ({
     else set({ selection: sel, currentMs: clamp(start, 0, durationMs) });
   },
 
+  setAudioAvailable(available) {
+    set({ audioAvailable: available });
+  },
   setMuted(muted) {
     set({ muted });
   },
@@ -345,11 +404,38 @@ export const useTimelineStore = create<TimelineState>((set, get) => ({
 
   clearVideos() {
     for (const state of Object.values(get().videos)) revokeShotVideo(state);
-    set({ videos: {} });
+    for (const state of Object.values(get().boards)) revokeBoard(state);
+    set({ videos: {}, boards: {} });
+  },
+
+  boardState(sceneOrdinal, shotOrdinal) {
+    return get().boards[videoKey(sceneOrdinal, shotOrdinal)] ?? IDLE_BOARD;
+  },
+
+  setBoardState(sceneOrdinal, shotOrdinal, next) {
+    const key = videoKey(sceneOrdinal, shotOrdinal);
+    const { boards } = get();
+    const prev = boards[key];
+    if (prev && next.src !== undefined && next.src !== prev.src) revokeBoard(prev);
+    set({
+      boards: {
+        ...boards,
+        [key]: {
+          status: next.status,
+          src: next.src === undefined ? (prev?.src ?? null) : next.src,
+          error: next.error ?? null,
+        },
+      },
+    });
+  },
+
+  setMonitorMode(mode) {
+    set({ monitorMode: mode });
   },
 
   clear() {
     for (const state of Object.values(get().videos)) revokeShotVideo(state);
+    for (const state of Object.values(get().boards)) revokeBoard(state);
     set({
       data: null,
       durationMs: 0,

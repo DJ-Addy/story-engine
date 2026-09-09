@@ -24,6 +24,7 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { AnimatePresence, motion, useReducedMotion } from "motion/react";
 import { api, API_MODE } from "@/lib/api";
+import { getShotBoard, renderShotBoard } from "@/lib/projectApi";
 import { useTimelineStore, videoKey } from "@/lib/timelineStore";
 import type { VisualClip } from "@/lib/types";
 import { describeFailure, FOCUS_RING } from "@/components/casting/theme";
@@ -187,6 +188,68 @@ export default function VideoMonitor() {
   const state = useTimelineStore((s) => (key ? s.videos[key] : undefined));
   const status = state?.status ?? "unknown";
   const video = state?.video ?? null;
+
+  // Animatic mode: the shot's drawn frame, cut to the audio by the transport.
+  const mode = useTimelineStore((s) => s.monitorMode);
+  const setMonitorMode = useTimelineStore((s) => s.setMonitorMode);
+  const setBoardState = useTimelineStore((s) => s.setBoardState);
+  const board = useTimelineStore((s) => (key ? s.boards[key] : undefined));
+  const boardStatus = board?.status ?? "unknown";
+  const boardSrc = board?.src ?? null;
+  const [boardArmed, setBoardArmed] = useState<string | null>(null);
+
+  // Probe for a board once per shot, in either mode: the video footer says
+  // "from its board" when one exists, so the answer is needed regardless.
+  useEffect(() => {
+    if (API_MODE === "mock" || !renderable || sceneOrdinal === null || shotOrdinal === null) return;
+    if (boardStatus !== "unknown") return;
+    let cancelled = false;
+    setBoardState(sceneOrdinal, shotOrdinal, { status: "probing" });
+    getShotBoard(projectId, sceneOrdinal, shotOrdinal)
+      .then((src) => {
+        if (cancelled) {
+          if (src) URL.revokeObjectURL(src);
+          return;
+        }
+        setBoardState(
+          sceneOrdinal,
+          shotOrdinal,
+          src ? { status: "ready", src } : { status: "none", src: null },
+        );
+      })
+      .catch((err: unknown) => {
+        if (cancelled) return;
+        setBoardState(sceneOrdinal, shotOrdinal, {
+          status: "error",
+          src: null,
+          error: describeFailure(err).detail,
+        });
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [renderable, sceneOrdinal, shotOrdinal, projectId, boardStatus, setBoardState]);
+
+  const drawBoard = useCallback(async () => {
+    if (!renderable || sceneOrdinal === null || shotOrdinal === null) return;
+    setBoardArmed(null);
+    setBoardState(sceneOrdinal, shotOrdinal, { status: "rendering", src: null });
+    try {
+      await renderShotBoard(projectId, sceneOrdinal, shotOrdinal);
+      const src = await getShotBoard(projectId, sceneOrdinal, shotOrdinal);
+      setBoardState(
+        sceneOrdinal,
+        shotOrdinal,
+        src ? { status: "ready", src } : { status: "none", src: null },
+      );
+    } catch (err: unknown) {
+      setBoardState(sceneOrdinal, shotOrdinal, {
+        status: "error",
+        src: null,
+        error: describeFailure(err).detail,
+      });
+    }
+  }, [renderable, sceneOrdinal, shotOrdinal, projectId, setBoardState]);
 
   const videoRef = useRef<HTMLVideoElement>(null);
   const unmounted = useRef(false);
@@ -353,6 +416,19 @@ export default function VideoMonitor() {
       <StatePill tone="idle">no render</StatePill>
     );
 
+  const boardPill =
+    !data || !clip ? null : boardStatus === "ready" ? (
+      <StatePill tone="good">board drawn</StatePill>
+    ) : boardStatus === "rendering" ? (
+      <StatePill tone="busy">drawing</StatePill>
+    ) : boardStatus === "error" ? (
+      <StatePill tone="bad">board failed</StatePill>
+    ) : boardStatus === "probing" || boardStatus === "unknown" ? (
+      <StatePill tone="idle">checking…</StatePill>
+    ) : (
+      <StatePill tone="idle">no board</StatePill>
+    );
+
   return (
     // Height is INTRINSIC: header + the 16:9 stage + footer. The workspace
     // derives the monitor's width from the height it can spare (.ws-monitor-fit
@@ -368,7 +444,28 @@ export default function VideoMonitor() {
         <h2 className="text-[11px] font-semibold uppercase tracking-[0.16em] text-zinc-300">
           Program monitor
         </h2>
-        {pill}
+        {mode === "video" ? pill : boardPill}
+        <div
+          role="tablist"
+          aria-label="Monitor mode"
+          className="ml-2 flex overflow-hidden rounded-md border border-[var(--hairline)]"
+        >
+          {(["animatic", "video"] as const).map((m) => (
+            <button
+              key={m}
+              role="tab"
+              aria-selected={mode === m}
+              onClick={() => setMonitorMode(m)}
+              className={`px-2 py-0.5 font-mono text-[9px] uppercase tracking-wider transition-colors ${
+                mode === m
+                  ? "bg-amber-400 text-zinc-950"
+                  : "bg-[var(--surface-3)] text-zinc-400 hover:text-zinc-100"
+              } ${FOCUS_RING}`}
+            >
+              {m}
+            </button>
+          ))}
+        </div>
         {clip && (
           <span className="ml-auto truncate font-mono text-[10px] text-zinc-600">
             shot {clip.shotOrdinal} of {data?.lanes.visual.length ?? 0}
@@ -393,8 +490,47 @@ export default function VideoMonitor() {
           </div>
         )}
 
+        {/* ANIMATIC: the drawn frame, held for the shot's duration. */}
+        {mode === "animatic" && clip && boardStatus === "ready" && boardSrc && (
+          // eslint-disable-next-line @next/next/no-img-element
+          <img
+            src={boardSrc}
+            alt={`Storyboard frame for shot ${clip.shotOrdinal}`}
+            className="absolute inset-0 h-full w-full object-contain"
+          />
+        )}
+        {mode === "animatic" && clip && boardStatus === "rendering" && (
+          <Slate clip={clip} sceneTitle={data?.sceneTitle ?? ""}>
+            <p className="text-sm font-medium text-amber-100">Drawing shot #{clip.shotOrdinal}…</p>
+            <p className="font-mono text-[10px] text-zinc-500">
+              Gemini is composing the frame from the shot spec
+            </p>
+          </Slate>
+        )}
+        {mode === "animatic" && clip && renderable && (boardStatus === "probing" || boardStatus === "unknown") && (
+          <Slate clip={clip} sceneTitle={data?.sceneTitle ?? ""}>
+            <p className="font-mono text-[11px] uppercase tracking-[0.2em] text-zinc-600">
+              checking for a board
+            </p>
+          </Slate>
+        )}
+        {mode === "animatic" && clip && (boardStatus === "none" || boardStatus === "error" || (!renderable && boardStatus !== "rendering")) && (
+          <Slate clip={clip} sceneTitle={data?.sceneTitle ?? ""}>
+            <p className="text-sm font-medium text-zinc-300">
+              {boardStatus === "error" ? "Board unavailable" : "No board drawn for this shot"}
+            </p>
+            <p className="max-w-md text-xs leading-relaxed text-zinc-500">
+              {boardStatus === "error"
+                ? (board?.error ?? "The request failed.")
+                : renderable
+                  ? "The animatic shows one drawn frame per shot, cut to the audio. Draw this one here, or draw the whole scene from the pipeline."
+                  : "This shot only exists in the local edit and cannot be drawn until the shot list is saved."}
+            </p>
+          </Slate>
+        )}
+
         {/* READY + playable: the real thing. */}
-        {clip && status === "ready" && video?.src && (
+        {mode === "video" && clip && status === "ready" && video?.src && (
           <video
             ref={videoRef}
             src={video.src}
@@ -416,7 +552,7 @@ export default function VideoMonitor() {
         )}
 
         {/* READY but not playable here: a provider reference, not a dead player. */}
-        {clip && status === "ready" && !video?.src && (
+        {mode === "video" && clip && status === "ready" && !video?.src && (
           <Slate clip={clip} sceneTitle={data?.sceneTitle ?? ""}>
             <p className="text-sm font-medium text-zinc-200">
               Rendered, stored outside this app
@@ -434,7 +570,7 @@ export default function VideoMonitor() {
         )}
 
         {/* PROBING */}
-        {clip && (status === "probing" || status === "unknown") && renderable && (
+        {mode === "video" && clip && (status === "probing" || status === "unknown") && renderable && (
           <Slate clip={clip} sceneTitle={data?.sceneTitle ?? ""}>
             <p className="font-mono text-[11px] uppercase tracking-[0.2em] text-zinc-600">
               checking for a render
@@ -443,7 +579,7 @@ export default function VideoMonitor() {
         )}
 
         {/* NO RENDER — the ordinary case, and the one this editor is built for. */}
-        {clip && (status === "none" || (!renderable && status === "unknown")) && (
+        {mode === "video" && clip && (status === "none" || (!renderable && status === "unknown")) && (
           <Slate clip={clip} sceneTitle={data?.sceneTitle ?? ""}>
             <span
               aria-hidden
@@ -474,7 +610,7 @@ export default function VideoMonitor() {
         )}
 
         {/* RENDERING */}
-        {clip && status === "rendering" && (
+        {mode === "video" && clip && status === "rendering" && (
           <Slate clip={clip} sceneTitle={data?.sceneTitle ?? ""}>
             <p className="text-sm font-medium text-amber-100">
               Rendering shot #{clip.shotOrdinal}…
@@ -496,7 +632,7 @@ export default function VideoMonitor() {
         )}
 
         {/* ERROR */}
-        {clip && status === "error" && (
+        {mode === "video" && clip && status === "error" && (
           <Slate clip={clip} sceneTitle={data?.sceneTitle ?? ""}>
             <span
               aria-hidden
@@ -525,12 +661,18 @@ export default function VideoMonitor() {
       {/* Monitor footer: the affordance, and the honest caveats. */}
       <div className="flex flex-wrap items-center gap-x-3 gap-y-2 border-t border-[var(--hairline)] px-4 py-2.5">
         <p className="min-w-0 flex-1 text-[10px] leading-relaxed text-zinc-600">
-          {status === "ready" && video?.src
-            ? "Picture follows the timeline clock; clip audio is muted so the rendered mix stays the only sound."
-            : "Video is optional here — the timeline, transport and inspector work with or without it."}
+          {mode === "animatic"
+            ? boardStatus === "ready"
+              ? "Animatic: the drawn frame is held for the shot and cut to the rendered mix by the transport."
+              : "Animatic mode shows a drawn frame per shot, cut to the audio. Boards cost cents; switch to Video to render a shot with Veo."
+            : status === "ready" && video?.src
+              ? "Picture follows the timeline clock; clip audio is muted so the rendered mix stays the only sound."
+              : boardStatus === "ready"
+                ? "This shot has a board, so Veo will animate that frame (image-to-video) rather than work from the prompt alone."
+                : "Video is optional here — the timeline, transport and inspector work with or without it."}
         </p>
 
-        {clip && status === "error" && (
+        {mode === "video" && clip && status === "error" && (
           <button
             onClick={retry}
             className={`shrink-0 rounded-md border border-[var(--hairline-strong)] px-2.5 py-1 font-mono text-[10px] text-zinc-300 transition-colors hover:border-zinc-500 hover:text-zinc-100 ${FOCUS_RING}`}
@@ -539,8 +681,40 @@ export default function VideoMonitor() {
           </button>
         )}
 
+        {mode === "animatic" && clip && renderable && (boardStatus === "none" || boardStatus === "error") && (
+          <div className="flex shrink-0 items-center gap-2">
+            {boardArmed === activeId ? (
+              <>
+                <span className="font-mono text-[10px] text-amber-300">
+                  {API_MODE === "mock" ? "mock mode has no provider —" : "Gemini image · about 4¢"}
+                </span>
+                <button
+                  onClick={drawBoard}
+                  disabled={API_MODE === "mock"}
+                  className={`rounded-md bg-amber-400 px-2.5 py-1 font-mono text-[10px] uppercase tracking-wider text-zinc-950 hover:bg-amber-300 disabled:opacity-40 ${FOCUS_RING}`}
+                >
+                  draw it
+                </button>
+                <button
+                  onClick={() => setBoardArmed(null)}
+                  className={`rounded-md border border-[var(--hairline-strong)] px-2 py-1 font-mono text-[10px] text-zinc-400 hover:text-zinc-100 ${FOCUS_RING}`}
+                >
+                  cancel
+                </button>
+              </>
+            ) : (
+              <button
+                onClick={() => setBoardArmed(activeId)}
+                className={`rounded-md border border-amber-500/40 bg-amber-500/10 px-2.5 py-1 font-mono text-[10px] uppercase tracking-wider text-amber-200 hover:bg-amber-500/20 ${FOCUS_RING}`}
+              >
+                draw this board
+              </button>
+            )}
+          </div>
+        )}
+
         <AnimatePresence initial={false} mode="popLayout">
-          {clip && renderable && (status === "none" || status === "error") && (
+          {mode === "video" && clip && renderable && (status === "none" || status === "error") && (
             <motion.div
               key={armed ? "confirm" : "arm"}
               initial={reduce ? false : { opacity: 0, y: 4 }}

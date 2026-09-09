@@ -14,7 +14,11 @@ import { usePathname } from "next/navigation";
 import type { ReactNode } from "react";
 import { FOCUS_RING } from "@/components/casting/theme";
 
+// Order is the order of the work: start with the guided pipeline, bring in a
+// manuscript, then the three surfaces the pipeline hands off to.
 const SURFACES = [
+  { href: "/pipeline", label: "Pipeline" },
+  { href: "/new", label: "New project" },
   { href: "/workspace", label: "Workspace" },
   { href: "/casting", label: "Casting" },
   { href: "/dashboard", label: "Analytics" },

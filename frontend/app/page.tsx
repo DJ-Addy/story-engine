@@ -35,7 +35,7 @@ export default function Home() {
                 </li>
                 <li>
                   <Link
-                    href="/workspace"
+                    href="/pipeline"
                     className={`rounded-sm transition-colors hover:text-zinc-50 ${FOCUS_RING}`}
                   >
                     Workspace

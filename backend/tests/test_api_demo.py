@@ -129,7 +129,7 @@ def test_status_after_seeding_names_the_project(client):
         "seeded": True,
         "project_id": project_id,
         "title": seed.DEMO_TITLE,
-        "scene_count": 4,
+        "scene_count": 1,
     }
 
 
@@ -244,7 +244,7 @@ def test_a_partial_seed_is_completed_rather_than_duplicated(repo):
     user = repo.create_user(seed.DEMO_EMAIL, "not-a-real-hash", auth.new_salt())
     demo = seed.ensure_seeded(repo)
     assert demo.user.id == user.id
-    assert demo.scene_count == 4
+    assert demo.scene_count == 1
     assert len(repo.list_projects(user.id)) == 1
 
 
@@ -255,9 +255,9 @@ def test_a_partial_seed_is_completed_rather_than_duplicated(repo):
 
 def test_screenplay_ships_inside_the_installed_package():
     """Guards the pyproject package-data entry: tests/ never reaches the image."""
-    packaged = resources.files("app.demo").joinpath("lighthouse.fountain")
+    packaged = resources.files("app.demo").joinpath("odyssey_sirens.fountain")
     assert packaged.is_file()
-    assert seed.screenplay_text().startswith("Title: The Lighthouse Wager")
+    assert seed.screenplay_text().startswith("Title: The Odyssey - Book XII, The Sirens")
 
 
 def test_seeded_graph_is_what_the_packaged_fountain_parses_to(client):
@@ -269,17 +269,19 @@ def test_seeded_graph_is_what_the_packaged_fountain_parses_to(client):
 
 
 def test_seeded_graph_has_the_scenes_and_characters_of_the_screenplay(client):
+    """The sample is Book XII of the Odyssey, converted from prose.
+
+    What this pins is that the packaged Fountain round-trips through the same
+    parser POST /script uses: one real scene, two speaking parts, and every
+    dialogue line attributed by cue at full confidence - which is exactly what
+    a converted novel must look like once it re-enters the screenplay path.
+    """
     project_id, headers = start_session(client)
     graph = client.get(f"/api/v1/projects/{project_id}/graph", headers=headers).json()
 
-    assert [s["ordinal"] for s in graph["scenes"]] == [0, 1, 2, 3]
-    assert [s["slugline"] for s in graph["scenes"]] == [
-        None,
-        "EXT. HARBOR TOWN - NIGHT",
-        "INT. LIGHTHOUSE - KEEPER'S ROOM - NIGHT",
-        "EXT. LIGHTHOUSE - CLIFF PATH - NIGHT",
-    ]
-    assert {c["canonical_name"] for c in graph["characters"]} == {"MARA", "TOM"}
+    real_scenes = [s for s in graph["scenes"] if s["ordinal"] >= 1]
+    assert [s["ordinal"] for s in real_scenes] == [1]
+    assert {c["canonical_name"] for c in graph["characters"]} == {"ULYSSES", "THE SIRENS"}
 
     dialogue = [
         line
@@ -287,10 +289,10 @@ def test_seeded_graph_has_the_scenes_and_characters_of_the_screenplay(client):
         for line in scene["lines"]
         if line["kind"] == "dialogue"
     ]
-    assert dialogue, "expected dialogue lines in the seeded graph"
-    assert {line["character_name"] for line in dialogue} == {"MARA", "TOM"}
-    assert "Then tonight it burns." in {line["text"] for line in dialogue}
-
+    assert dialogue, "the passage has speech in it"
+    assert {line["character_name"] for line in dialogue} == {"ULYSSES", "THE SIRENS"}
+    assert all(line["attribution_source"] == "cue" for line in dialogue)
+    assert all(line["attribution_confidence"] == 1.0 for line in dialogue)
 
 def test_the_seeded_scene_has_a_timeline_to_look_at(client):
     """What a reviewer actually opens: a scene view, with no render and no provider."""
@@ -312,7 +314,7 @@ def test_lifespan_seeds_before_the_first_request(repo, demo_on, monkeypatch):
     with _client(repo) as client:
         status = client.get("/api/v1/demo").json()
     assert status["seeded"] is True
-    assert status["scene_count"] == 4
+    assert status["scene_count"] == 1
 
 
 def test_lifespan_does_not_seed_when_the_demo_is_off(repo, monkeypatch):

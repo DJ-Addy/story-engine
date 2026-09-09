@@ -12,7 +12,7 @@ export default function FooterCta() {
             Your manuscript already knows how it wants to sound.
           </p>
           <Link
-            href="/workspace"
+            href="/pipeline"
             className={`mt-10 inline-block rounded-md bg-amber-400 px-6 py-3 text-sm font-medium text-zinc-950 transition-colors hover:bg-amber-300 ${FOCUS_RING}`}
           >
             Open the demo workspace

@@ -56,6 +56,7 @@ export default function TransportBar({
   const reduce = useReducedMotion();
   const isPlaying = useTimelineStore((s) => s.isPlaying);
   const muted = useTimelineStore((s) => s.muted);
+  const audioAvailable = useTimelineStore((s) => s.audioAvailable);
   const pxPerSecond = useTimelineStore((s) => s.pxPerSecond);
   const hasData = useTimelineStore((s) => s.data !== null);
 
@@ -152,13 +153,20 @@ export default function TransportBar({
 
         <div className="h-6 w-px bg-[var(--hairline)]" aria-hidden />
 
-        {/* Mute — MUTED by default; the page is silent-safe on load */}
+        {/* Mute. Sound is ON by default: the timeline plays the rendered mix.
+            When the scene has no render there is nothing to mute, and the
+            button says so instead of implying a sound that does not exist. */}
         <motion.button
           whileTap={tap}
           onClick={handleMute}
-          disabled={!hasData}
+          disabled={!hasData || !audioAvailable}
           aria-pressed={!muted}
-          aria-label={muted ? "Unmute placeholder audio" : "Mute placeholder audio"}
+          title={
+            audioAvailable
+              ? undefined
+              : "No audio rendered for this scene yet — render it from the pipeline"
+          }
+          aria-label={muted ? "Unmute the rendered mix" : "Mute the rendered mix"}
           className={`flex items-center gap-1.5 rounded-md border px-2.5 py-1.5 text-xs transition-colors disabled:opacity-40 ${
             muted
               ? "border-[var(--hairline)] bg-[var(--surface-3)] text-zinc-400 hover:text-zinc-100"
@@ -177,7 +185,7 @@ export default function TransportBar({
             </svg>
           )}
           <span className="font-mono text-[10px] uppercase tracking-wider">
-            {muted ? "muted" : "sound"}
+            {!audioAvailable ? "no render" : muted ? "muted" : "sound"}
           </span>
         </motion.button>
       </div>

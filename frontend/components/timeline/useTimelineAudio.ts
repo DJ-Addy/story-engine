@@ -1,22 +1,30 @@
 "use client";
 
-// Owns the client-only placeholder audio engine and keeps it in step with the
-// transport. The engine is a procedural synth (no bundled media) — see
-// lib/timelineAudio.ts. MUTED by default, so the page is silent on load.
+// Owns the one <audio> element for the workspace and keeps it in step with the
+// transport. When a timeline with measured (`rendered`) timings loads, the
+// scene's mix is fetched from the API and handed to the engine; when the
+// timings are only estimated there is no mix, and the engine stays silent
+// rather than inventing one — the transport still scrubs, it just has nothing
+// to play, and the mute button says so.
 //
-// SEAM: swap TimelineAudioEngine for a real <audio> element sourced from the
-// rendered mix (GET /api/v1/projects/{id}/render/audio). The wiring below —
-// mute sync, play/pause following the transport, and SFX blips from the clock —
-// maps 1:1 onto <audio>.muted / play() / pause() / currentTime.
+// The engine follows the store imperatively (store.subscribe) rather than via
+// hooks, for the same reason the program monitor does: a moving playhead must
+// not re-render this component sixty times a second.
 
 import { useCallback, useEffect, useRef } from "react";
 import { useTimelineStore } from "@/lib/timelineStore";
 import { TimelineAudioEngine } from "@/lib/timelineAudio";
+import { getSceneAudio } from "@/lib/projectApi";
+import { API_MODE } from "@/lib/api";
 
 export function useTimelineAudio() {
   const engineRef = useRef<TimelineAudioEngine | null>(null);
   const muted = useTimelineStore((s) => s.muted);
   const isPlaying = useTimelineStore((s) => s.isPlaying);
+  const projectId = useTimelineStore((s) => s.data?.projectId ?? null);
+  const sceneOrdinal = useTimelineStore((s) => s.data?.sceneOrdinal ?? null);
+  const timingSource = useTimelineStore((s) => s.data?.timingSource ?? null);
+  const setAudioAvailable = useTimelineStore((s) => s.setAudioAvailable);
 
   // Construct the engine client-side only, and tear it down on unmount.
   useEffect(() => {
@@ -29,24 +37,67 @@ export function useTimelineAudio() {
     };
   }, []);
 
-  // Keep the engine's mute flag mirrored to the store.
+  // Fetch the rendered mix for the loaded scene. Only a `rendered` timeline has
+  // one: an estimated timeline is the planner's guess and there is no WAV
+  // behind it. The mock has no fixture audio, so it skips the request.
+  useEffect(() => {
+    const engine = engineRef.current;
+    if (!engine) return;
+    if (
+      API_MODE === "mock" ||
+      projectId === null ||
+      sceneOrdinal === null ||
+      timingSource !== "rendered"
+    ) {
+      engine.load(null);
+      setAudioAvailable(false);
+      return;
+    }
+    let cancelled = false;
+    getSceneAudio(projectId, sceneOrdinal)
+      .then((src) => {
+        if (cancelled) {
+          if (src) URL.revokeObjectURL(src);
+          return;
+        }
+        engine.load(src);
+        setAudioAvailable(src !== null);
+        // If the transport is already rolling (a reload mid-play), catch up.
+        const s = useTimelineStore.getState();
+        engine.syncTime(s.currentMs);
+        if (s.isPlaying && !s.muted) engine.playBed();
+      })
+      .catch(() => {
+        if (cancelled) return;
+        engine.load(null);
+        setAudioAvailable(false);
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [projectId, sceneOrdinal, timingSource, setAudioAvailable]);
+
+  // Mirror the mute flag.
   useEffect(() => {
     engineRef.current?.setMuted(muted);
   }, [muted]);
 
-  // The placeholder bed follows the transport (and stays silent while muted).
+  // Play / pause follow the transport.
   useEffect(() => {
     const engine = engineRef.current;
     if (!engine) return;
-    if (isPlaying && !muted) {
-      engine.resume().then(() => engine.playBed()).catch(() => {});
-    } else {
-      engine.stopBed();
-    }
-  }, [isPlaying, muted]);
+    if (isPlaying) engine.playBed();
+    else engine.stopBed();
+  }, [isPlaying]);
 
-  // Call from a user gesture (Play / unmute) so AudioContext.resume() is allowed
-  // under the browser autoplay policy.
+  // Seek follows the clock — every tick and every scrub — without re-rendering.
+  useEffect(() => {
+    return useTimelineStore.subscribe((s, prev) => {
+      if (s.currentMs !== prev.currentMs) engineRef.current?.syncTime(s.currentMs);
+    });
+  }, []);
+
+  // Call from a user gesture (Play / unmute) so the browser lets audio start.
   const activate = useCallback(() => {
     engineRef.current?.resume().catch(() => {});
   }, []);

@@ -42,9 +42,15 @@ DEMO_EMAIL = "demo@story-engine.dev"
 # also how the project is *found* again among anything the demo token may have
 # created since, so it doubles as the seed's identity — do not change it
 # casually.
-DEMO_TITLE = "The Lighthouse Wager"
+#
+# The sample is Book XII of the Odyssey in Butler's translation, converted by
+# the novel ingest (app.ingest.novel) into the Fountain packaged beside this
+# module. It replaced a house-written screenplay because a judge can check it:
+# the passage is famous, the attribution is verifiable against the source, and
+# a sample nobody can second-guess proves nothing about the ingest tier.
+DEMO_TITLE = "The Odyssey - Book XII, The Sirens"
 
-_SCREENPLAY = "lighthouse.fountain"
+_SCREENPLAY = "odyssey_sirens.fountain"
 
 # Values that turn the demo off. Anything else (including unset and empty) leaves
 # it on: a deployment that wants a demo should get one without configuring

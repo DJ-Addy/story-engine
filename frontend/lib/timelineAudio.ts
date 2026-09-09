@@ -1,157 +1,135 @@
-// SEAM — mock placeholder audio. Real audio: swap this engine for a single
-// <audio> element sourced from GET /api/v1/projects/{id}/render/audio, drive
-// audio.currentTime from the transport's currentMs, and delete this synth.
+// The timeline's sound: the rendered scene mix, played through one <audio>
+// element that FOLLOWS the transport clock.
 //
-// A tiny, self-contained Web Audio placeholder so the timeline is audible with
-// NO bundled media: a subtle low ambient bed plus soft blips fired when the
-// transport crosses an SFX marker. SSR-safe — the AudioContext is created
-// lazily inside a user gesture, never at module load. Muted by default.
+// This replaced a procedural placeholder synth — a low oscillator bed and a
+// blip on every SFX marker — that had been left in as a "seam" to close later.
+// It was never closed: a scene could be rendered to a 4-minute, 35-clip WAV on
+// the server and the workspace would still play a drone, muted by default, so
+// the one thing a listener came for was the one thing they never heard.
+//
+// The method names are kept from the placeholder (`resume`, `setMuted`,
+// `playBed`, `stopBed`, `blip`, `dispose`) so `useTransportClock` and the
+// transport bar did not have to change. `blip` is a no-op: the SFX are baked
+// into the mix, and layering a synthesized click over a real footstep would be
+// the placeholder leaking back in.
+//
+// THE CLOCK STAYS IN THE STORE. The element is seeked to `currentMs` when it
+// drifts, and never writes time back — the same rule the program monitor
+// follows — so scrubbing, the playhead and the video all read one clock. The
+// cost is that the audio may be re-seeked a few times a second while playing if
+// the browser's clock and rAF disagree; the tolerance below keeps that
+// inaudible.
 
-const MASTER_LEVEL = 0.7; // master gain target when unmuted (0 when muted)
-const BED_LEVEL = 0.06; // low bed level → ~0.04 at the output; deliberately subtle
-const BLIP_LEVEL = 0.14; // per-blip envelope peak
-
-type AudioContextCtor = typeof AudioContext;
+/** How far the element may drift from the transport before it is re-seeked.
+ * Wide enough that normal rAF jitter never triggers it; tight enough that a
+ * seek is heard as a seek and not as lag. */
+const SEEK_TOLERANCE_S = 0.18;
 
 export class TimelineAudioEngine {
-  private ctx: AudioContext | null = null;
-  private master: GainNode | null = null;
-  private muted = true;
-  private bedGain: GainNode | null = null;
-  private bedNodes: OscillatorNode[] = [];
-  private bedPlaying = false;
+  private el: HTMLAudioElement | null = null;
+  private muted = false;
+  private src: string | null = null;
+  private srcIsObjectUrl = false;
+  /** Whether the transport wants sound right now (playBed/stopBed). */
+  private wantPlaying = false;
 
-  /** Lazily construct the AudioContext + master gain. Returns null with no DOM. */
-  private ensureContext(): AudioContext | null {
-    if (this.ctx) return this.ctx;
+  /** Lazily create the element. Returns null with no DOM (SSR). */
+  private ensure(): HTMLAudioElement | null {
+    if (this.el) return this.el;
     if (typeof window === "undefined") return null;
-    const Ctor: AudioContextCtor | undefined =
-      window.AudioContext ??
-      (window as unknown as { webkitAudioContext?: AudioContextCtor })
-        .webkitAudioContext;
-    if (!Ctor) return null;
-    const ctx = new Ctor();
-    const master = ctx.createGain();
-    master.gain.value = this.muted ? 0 : MASTER_LEVEL;
-    master.connect(ctx.destination);
-    this.ctx = ctx;
-    this.master = master;
-    return ctx;
+    const el = new Audio();
+    el.preload = "auto";
+    el.muted = this.muted;
+    this.el = el;
+    return el;
   }
 
-  /** Must be called from a user gesture (play / unmute) to unlock audio. */
+  /** Point the element at a rendered mix (an object URL from the API, or null
+   * when the scene has no render). Replacing the source releases the previous
+   * object URL, so a scene switch does not leak the last scene's WAV. */
+  load(src: string | null, srcIsObjectUrl = true): void {
+    if (this.src === src) return;
+    if (this.srcIsObjectUrl && this.src) {
+      try {
+        URL.revokeObjectURL(this.src);
+      } catch {
+        // Already released, or never a blob URL.
+      }
+    }
+    this.src = src;
+    this.srcIsObjectUrl = srcIsObjectUrl && src !== null;
+    const el = this.ensure();
+    if (!el) return;
+    el.pause();
+    if (src) {
+      el.src = src;
+      el.load();
+    } else {
+      el.removeAttribute("src");
+      el.load();
+    }
+  }
+
+  /** True when there is a real mix to play. The transport bar uses this to
+   * label the mute button honestly ("no render" rather than "muted"). */
+  hasSource(): boolean {
+    return this.src !== null;
+  }
+
+  /** Must be called from a user gesture (Play / unmute). Browsers gate audio
+   * playback behind a gesture; the element's own play() is what unlocks it. */
   async resume(): Promise<void> {
-    const ctx = this.ensureContext();
-    if (!ctx) return;
-    if (ctx.state === "suspended") await ctx.resume();
+    const el = this.ensure();
+    if (!el || !this.src) return;
+    if (!this.wantPlaying) return;
+    try {
+      await el.play();
+    } catch {
+      // Autoplay policy refused: the next gesture will succeed.
+    }
   }
 
   setMuted(muted: boolean): void {
     this.muted = muted;
-    if (!this.ctx || !this.master) return;
-    // Soft ramp to avoid clicks.
-    this.master.gain.setTargetAtTime(
-      muted ? 0 : MASTER_LEVEL,
-      this.ctx.currentTime,
-      0.05,
-    );
-    if (muted) this.stopBed();
+    if (this.el) this.el.muted = muted;
   }
 
-  /** Start the ambient bed: two low detuned oscillators through a lowpass, with
-   * a slow LFO on the level for gentle movement. No-op if muted / already on. */
+  /** Transport started. */
   playBed(): void {
-    if (this.muted || this.bedPlaying) return;
-    const ctx = this.ensureContext();
-    if (!ctx || !this.master) return;
-
-    const bedGain = ctx.createGain();
-    bedGain.gain.value = BED_LEVEL;
-    const lowpass = ctx.createBiquadFilter();
-    lowpass.type = "lowpass";
-    lowpass.frequency.value = 400;
-    lowpass.connect(bedGain);
-    bedGain.connect(this.master);
-
-    const osc1 = ctx.createOscillator();
-    osc1.type = "sine";
-    osc1.frequency.value = 55;
-    const osc2 = ctx.createOscillator();
-    osc2.type = "triangle";
-    osc2.frequency.value = 110;
-    osc2.detune.value = 6;
-    osc1.connect(lowpass);
-    osc2.connect(lowpass);
-
-    // Very slow LFO modulating the bed level so it breathes rather than drones.
-    const lfo = ctx.createOscillator();
-    lfo.type = "sine";
-    lfo.frequency.value = 0.07;
-    const lfoGain = ctx.createGain();
-    lfoGain.gain.value = BED_LEVEL * 0.5;
-    lfo.connect(lfoGain);
-    lfoGain.connect(bedGain.gain);
-
-    const now = ctx.currentTime;
-    osc1.start(now);
-    osc2.start(now);
-    lfo.start(now);
-
-    this.bedGain = bedGain;
-    this.bedNodes = [osc1, osc2, lfo];
-    this.bedPlaying = true;
+    this.wantPlaying = true;
+    const el = this.ensure();
+    if (!el || !this.src) return;
+    if (el.paused) el.play().catch(() => {});
   }
 
+  /** Transport paused or stopped. */
   stopBed(): void {
-    if (!this.bedPlaying) return;
-    const t = this.ctx ? this.ctx.currentTime : 0;
-    for (const osc of this.bedNodes) {
+    this.wantPlaying = false;
+    if (this.el && !this.el.paused) this.el.pause();
+  }
+
+  /** Keep the element on the transport clock. Called on every clock tick and
+   * on every seek; cheap when nothing has drifted. */
+  syncTime(currentMs: number): void {
+    const el = this.el;
+    if (!el || !this.src) return;
+    const target = Math.max(0, currentMs / 1000);
+    if (Math.abs(el.currentTime - target) > SEEK_TOLERANCE_S) {
       try {
-        osc.stop(t);
+        el.currentTime = target;
       } catch {
-        // already stopped — safe to ignore
+        // Metadata not loaded yet; the next tick retries.
       }
-      osc.disconnect();
     }
-    this.bedNodes = [];
-    if (this.bedGain) {
-      this.bedGain.disconnect();
-      this.bedGain = null;
-    }
-    this.bedPlaying = false;
   }
 
-  /** A soft, short blip for an SFX marker crossing. No-op if muted / no DOM. */
-  blip(): void {
-    if (this.muted) return;
-    const ctx = this.ensureContext();
-    if (!ctx || !this.master) return;
-    const now = ctx.currentTime;
-
-    const osc = ctx.createOscillator();
-    osc.type = "triangle";
-    osc.frequency.setValueAtTime(760, now);
-    osc.frequency.exponentialRampToValueAtTime(680, now + 0.12);
-
-    const env = ctx.createGain();
-    env.gain.setValueAtTime(0.0001, now);
-    env.gain.exponentialRampToValueAtTime(BLIP_LEVEL, now + 0.008);
-    env.gain.exponentialRampToValueAtTime(0.0001, now + 0.13);
-
-    osc.connect(env);
-    env.connect(this.master);
-    osc.start(now);
-    osc.stop(now + 0.16);
-    osc.onended = () => {
-      osc.disconnect();
-      env.disconnect();
-    };
-  }
+  /** SFX markers are already in the mix. Kept so the clock's call site is
+   * unchanged. */
+  blip(): void {}
 
   dispose(): void {
     this.stopBed();
-    if (this.ctx) void this.ctx.close();
-    this.ctx = null;
-    this.master = null;
+    this.load(null);
+    this.el = null;
   }
 }
