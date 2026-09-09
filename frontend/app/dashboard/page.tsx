@@ -275,7 +275,7 @@ export default function AnalyticsDashboardPage() {
           <span className="text-zinc-700" aria-hidden>
             /
           </span>
-          <h1 className="font-mono text-xs text-zinc-100">Analytics</h1>
+          <h1 data-tour="dashboard" className="font-mono text-xs text-zinc-100">Analytics</h1>
           <span className="hidden rounded border border-[var(--hairline)] px-1.5 py-0.5 font-mono text-[10px] text-zinc-500 md:inline">
             ClickHouse via MCP
           </span>

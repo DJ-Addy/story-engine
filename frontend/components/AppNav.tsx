@@ -11,9 +11,9 @@
 
 import Link from "next/link";
 import { usePathname, useRouter } from "next/navigation";
-import { Suspense, type ReactNode } from "react";
+import type { ReactNode } from "react";
 import { FOCUS_RING } from "@/components/casting/theme";
-import Tour, { startTour } from "@/components/tour/Tour";
+import { startTour } from "@/components/tour/Tour";
 
 // Order is the order of the work: start with the guided pipeline, bring in a
 // manuscript, then the three surfaces the pipeline hands off to.
@@ -90,11 +90,6 @@ export default function AppNav({
           </button>
         </div>
       </div>
-      {/* The tour reads the URL, so it sits under its own boundary rather than
-          asking every page that mounts this bar to provide one. */}
-      <Suspense fallback={null}>
-        <Tour />
-      </Suspense>
     </header>
   );
 }

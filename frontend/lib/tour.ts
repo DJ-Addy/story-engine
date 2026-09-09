@@ -86,7 +86,7 @@ export const TOUR_STEPS: TourStep[] = [
   },
   {
     route: "/dashboard",
-    target: "nav-analytics",
+    target: "dashboard",
     title: "Every decision, in ClickHouse",
     body: "Judge scores, render events and cost decisions are written through the official ClickHouse MCP server as they happen and read back here — leaderboards, spend, and the refusals the cost governor made.",
     placement: "bottom",
