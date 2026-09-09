@@ -316,6 +316,34 @@ class FindingPatch(BaseModel):
     deliberate_note: str | None = None
 
 
+class CastEntryIn(BaseModel):
+    """One part, as a director wants it cast.
+
+    ``character`` is ``None`` for the narrator, matching the renderer's own
+    convention. ``chorus_voice_ids`` names further voices the part is spoken
+    by, mixed into one clip.
+    """
+
+    character: str | None = None
+    voice_id: str
+    voice_name: str | None = None
+    tone: str | None = None
+    rationale: str = ""
+    chorus_voice_ids: list[str] = Field(default_factory=list)
+
+
+class CastingOverrideRequest(BaseModel):
+    """Body for PUT .../judge/casting - the whole casting, not a patch.
+
+    Whole rather than partial because a casting is one decision: replacing it
+    entry by entry would let a project sit in a state no one chose, half the
+    judge's and half the director's, with nothing recording which half was
+    which.
+    """
+
+    entries: list[CastEntryIn] = Field(min_length=1)
+
+
 class CastingDecisionRequest(BaseModel):
     """Body for POST .../judge/casting.
 

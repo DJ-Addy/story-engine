@@ -23,9 +23,10 @@ from app.adapters.base import Voice
 from app.analytics.events import animatic_events, ranking_events, voice_fit_events
 from app.analytics.recorder import EventRecorder
 from app.api.deps import get_owned_project, get_repo
-from app.api.repo import CastEntry, ProjectRecord, Repository
+from app.api.repo import CastEntry, CastingRecord, ProjectRecord, Repository
 from app.api.routers.analytics import emit, get_analytics_recorder
 from app.api.schemas import (
+    CastingOverrideRequest,
     AnimaticJudgmentOut,
     AnimaticRankingOut,
     AnimaticRankRequest,
@@ -56,6 +57,63 @@ def _get_graph_or_404(repo: Repository, project_id: str) -> StoryGraph:
     if script is None:
         raise HTTPException(status_code=404, detail="No script uploaded yet")
     return script.graph
+
+
+@router.put("/casting", response_model=CastingProposal)
+def override_casting(
+    body: CastingOverrideRequest,
+    project: ProjectRecord = Depends(get_owned_project),
+    repo: Repository = Depends(get_repo),
+) -> CastingProposal:
+    """Replace the casting with the director's own.
+
+    The judge proposes; this is how someone overrules it. It exists because a
+    proposal made without an LLM cannot know things the text never states -
+    that Ulysses is a man, that the Sirens are women - so a heuristic that
+    deals voices by line count will sometimes be confidently wrong about a
+    part, and the fix should not be to make the heuristic pretend it knows.
+
+    Stored with ``source="manual"``, so a later reader can tell a decision that
+    was made from one that was proposed. Validated against the story graph:
+    casting a character the script does not have is a typo, and silently
+    keeping it would leave a casting the renderer never consults.
+    """
+    graph = _get_graph_or_404(repo, project.id)
+    known = {
+        line.character_name
+        for scene in graph.scenes
+        for line in scene.lines
+        if line.character_name
+    }
+    unknown = sorted(
+        {e.character for e in body.entries if e.character is not None} - known
+    )
+    if unknown:
+        raise HTTPException(
+            status_code=422,
+            detail=(
+                f"No such character(s) in this script: {', '.join(unknown)}. "
+                f"Known: {', '.join(sorted(known)) or '(none)'}"
+            ),
+        )
+
+    record = repo.save_casting(
+        project.id,
+        [
+            CastEntry(
+                character=e.character,
+                voice_id=e.voice_id,
+                voice_name=e.voice_name or e.voice_id,
+                tone=e.tone,
+                confidence=1.0,  # a person decided; there is nothing to estimate
+                rationale=e.rationale or "Cast by the director.",
+                chorus_voice_ids=list(e.chorus_voice_ids),
+            )
+            for e in body.entries
+        ],
+        "manual",
+    )
+    return _casting_to_proposal(record)
 
 
 @router.post("/casting", response_model=CastingProposal, status_code=201)
@@ -121,17 +179,15 @@ async def decide_casting(
     return proposal
 
 
-@router.get("/casting", response_model=CastingProposal | None)
-def get_decided_casting(
-    project: ProjectRecord = Depends(get_owned_project),
-    repo: Repository = Depends(get_repo),
-) -> CastingProposal | None:
-    """The casting this project renders with, or null if none was decided."""
+def _casting_to_proposal(record: CastingRecord) -> CastingProposal:
+    """Render a stored casting in the same shape the proposer returns.
+
+    A saved record keeps the decision but not the arithmetic behind it, so
+    ``voice_fit`` comes back 0.0 - see the scorecard, which reads that as
+    "restored from storage" rather than printing it as a score.
+    """
     from app.judge.model import CastingProposalEntry
 
-    record = repo.get_casting(project.id)
-    if record is None:
-        return None
     return CastingProposal(
         entries=[
             CastingProposalEntry(
@@ -142,12 +198,23 @@ def get_decided_casting(
                 tone=entry.tone,
                 confidence=entry.confidence,
                 voice_fit=0.0,
+                chorus_voice_ids=list(entry.chorus_voice_ids),
                 rationale=entry.rationale,
             )
             for entry in record.entries
         ],
         rationale=f"Saved casting ({record.source}).",
     )
+
+
+@router.get("/casting", response_model=CastingProposal | None)
+def get_decided_casting(
+    project: ProjectRecord = Depends(get_owned_project),
+    repo: Repository = Depends(get_repo),
+) -> CastingProposal | None:
+    """The casting this project renders with, or null if none was decided."""
+    record = repo.get_casting(project.id)
+    return None if record is None else _casting_to_proposal(record)
 
 
 @router.post("/voices", response_model=VoiceFitOut)

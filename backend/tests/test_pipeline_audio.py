@@ -396,3 +396,77 @@ class TestTimelineReportsWhatWasSynthesized:
             clip = by_ordinal.get(line.ordinal)
             if clip is not None:
                 assert clip.emotion == line.emotion
+
+
+class TestChorusVoices:
+    """A part can be spoken by more than one voice, mixed into one clip.
+
+    The Sirens are why: the text says "listen to our two voices" and they are
+    a single character in the graph, so one voice for the part is a reading of
+    the scene that the scene itself contradicts.
+    """
+
+    @staticmethod
+    def _scene(fountain: str):
+        from app.ingest.fountain import parse_fountain
+        from app.ingest.normalize import normalize
+
+        return normalize(parse_fountain(fountain)).scenes[1]
+
+    async def _render(self, fountain: str, chorus_map):
+        from app.adapters.fake import FakeTTS
+        from app.render.audio.pipeline import render_scene_audio_with_timing
+
+        scene = self._scene(fountain)
+        tts = FakeTTS()
+        voices = await tts.list_voices()
+        voice_map = {None: voices[0].id}
+        for line in scene.lines:
+            if line.kind == "dialogue" and line.character_name:
+                voice_map[line.character_name] = voices[0].id
+        return await render_scene_audio_with_timing(
+            scene, voice_map, tts, chorus_map=chorus_map
+        )
+
+    @staticmethod
+    def _speaker(scene) -> str:
+        return next(
+            line.character_name
+            for line in scene.lines
+            if line.kind == "dialogue" and line.character_name
+        )
+
+    async def test_a_chorus_changes_the_audio(self, sample_fountain: str) -> None:
+        from app.adapters.fake import FakeTTS
+
+        tts = FakeTTS()
+        voices = await tts.list_voices()
+        speaker = self._speaker(self._scene(sample_fountain))
+
+        solo, _ = await self._render(sample_fountain, None)
+        chorus, _ = await self._render(sample_fountain, {speaker: [voices[-1].id]})
+
+        assert solo.wav_bytes != chorus.wav_bytes, "the second voice must be audible"
+
+    async def test_a_chorus_does_not_stretch_the_clip(self, sample_fountain: str) -> None:
+        """The primary take owns the duration the timeline was planned against."""
+        from app.adapters.fake import FakeTTS
+
+        tts = FakeTTS()
+        voices = await tts.list_voices()
+        speaker = self._speaker(self._scene(sample_fountain))
+
+        _solo, solo_timing = await self._render(sample_fountain, None)
+        _chorus, chorus_timing = await self._render(
+            sample_fountain, {speaker: [voices[-1].id]}
+        )
+
+        solo_clips = {c.line_ordinal: c.duration_ms for c in solo_timing.clips}
+        chorus_clips = {c.line_ordinal: c.duration_ms for c in chorus_timing.clips}
+        assert solo_clips == chorus_clips
+
+    async def test_no_chorus_renders_exactly_as_before(self, sample_fountain: str) -> None:
+        """An empty chorus map must be byte-identical to passing none at all."""
+        absent, _ = await self._render(sample_fountain, None)
+        empty, _ = await self._render(sample_fountain, {})
+        assert absent.wav_bytes == empty.wav_bytes

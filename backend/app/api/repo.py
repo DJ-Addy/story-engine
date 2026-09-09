@@ -93,6 +93,12 @@ class CastEntry(BaseModel):
     ``tone`` is a value from ``app.nlp.emotion.EMOTIONS`` or ``None``. None is a
     real answer meaning "the text gave no signal", not a missing field: the TTS
     adapter accepts ``emotion=None`` and simply does not steer the delivery.
+
+    ``chorus_voice_ids`` names voices the part is spoken by *in addition to*
+    ``voice_id``. The Sirens are the reason it exists - they say "listen to our
+    two voices" and are one character in the graph - so the renderer speaks the
+    line in every named voice and mixes them into one clip. Empty is the normal
+    case and costs nothing.
     """
 
     character: str | None = None
@@ -101,6 +107,7 @@ class CastEntry(BaseModel):
     tone: str | None = None
     confidence: float = 0.0
     rationale: str = ""
+    chorus_voice_ids: list[str] = Field(default_factory=list)
 
 
 class CastingRecord(BaseModel):

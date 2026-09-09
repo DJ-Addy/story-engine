@@ -165,7 +165,7 @@ class TestVoicesComeFromTheProvider:
         tts = FakeTTS()
         catalogue = {voice.id for voice in await tts.list_voices()}
 
-        mapping, _tones = await _voice_map(self._scene(sample_fountain), tts)
+        mapping, _tones, _chorus = await _voice_map(self._scene(sample_fountain), tts)
 
         assert mapping, "expected at least a narrator"
         unknown = set(mapping.values()) - catalogue
@@ -178,7 +178,7 @@ class TestVoicesComeFromTheProvider:
         from app.api.routers.scenes import _voice_map
 
         tts = FakeTTS()
-        mapping, _tones = await _voice_map(self._scene(sample_fountain), tts)
+        mapping, _tones, _chorus = await _voice_map(self._scene(sample_fountain), tts)
 
         narrator = mapping[None]
         characters = [v for k, v in mapping.items() if k is not None]
@@ -194,8 +194,8 @@ class TestVoicesComeFromTheProvider:
         from app.api.routers.scenes import _voice_map
 
         scene = self._scene(sample_fountain)
-        first, _ = await _voice_map(scene, FakeTTS())
-        second, _ = await _voice_map(scene, FakeTTS())
+        first, _, _chorus = await _voice_map(scene, FakeTTS())
+        second, _, _chorus = await _voice_map(scene, FakeTTS())
 
         assert first == second
 
@@ -250,7 +250,7 @@ class TestCastingReachesTheRender:
             for line in scene.lines
             if line.kind == "dialogue" and line.character_name
         )
-        dealt, _ = await _voice_map(scene, tts)
+        dealt, _, _chorus = await _voice_map(scene, tts)
 
         # Deliberately cast a voice the round-robin did NOT choose, so the
         # assertion below proves the casting decided rather than coinciding.
@@ -260,7 +260,7 @@ class TestCastingReachesTheRender:
         casting.entries[0].voice_id = other.id
         casting.entries[0].voice_name = other.name
 
-        cast, tones = await _voice_map(scene, tts, casting)
+        cast, tones, _chorus = await _voice_map(scene, tts, casting)
 
         assert dealt[speaker] != other.id
         assert cast[speaker] == other.id
@@ -277,7 +277,7 @@ class TestCastingReachesTheRender:
         scene = self._scene(sample_fountain)
         casting, _ = await self._casting(tts, "SOMEONE-NOT-IN-THIS-SCENE", "calm")
 
-        mapping, _tones = await _voice_map(scene, tts, casting)
+        mapping, _tones, _chorus = await _voice_map(scene, tts, casting)
 
         catalogue = {voice.id for voice in await tts.list_voices()}
         speakers = {
@@ -322,7 +322,7 @@ class TestCastingReachesTheRender:
             source="judge",
         )
 
-        mapping, tones = await _voice_map(scene, tts, stale)
+        mapping, tones, _chorus = await _voice_map(scene, tts, stale)
 
         catalogue = {voice.id for voice in await tts.list_voices()}
         assert mapping[speaker] in catalogue

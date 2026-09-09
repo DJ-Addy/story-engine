@@ -79,7 +79,9 @@ async def _voice_map(
     scene: NormalizedScene,
     tts: TTSProvider,
     casting: CastingRecord | None = None,
-) -> tuple[dict[str | None, str], dict[str | None, str | None]]:
+) -> tuple[
+    dict[str | None, str], dict[str | None, str | None], dict[str | None, list[str]]
+]:
     """Give the narrator and every speaking character a voice the provider has.
 
     The catalogue comes from the provider, so this cannot name a voice that does
@@ -101,8 +103,8 @@ async def _voice_map(
     not silent, and the deal below is deterministic so it stays stable across
     renders.
 
-    Returns ``(voice_map, tone_map)``; the tone map is empty unless a casting
-    supplied one.
+    Returns ``(voice_map, tone_map, chorus_map)``; the tone and chorus maps are
+    empty unless a casting supplied them.
     """
     catalogue = await tts.list_voices()
     if not catalogue:
@@ -127,6 +129,7 @@ async def _voice_map(
         voice_map[speaker] = pool[index % len(pool)]
 
     tone_map: dict[str | None, str | None] = {}
+    chorus_map: dict[str | None, list[str]] = {}
     if casting is not None:
         known = {voice.id for voice in catalogue}
         for entry in casting.entries:
@@ -138,8 +141,13 @@ async def _voice_map(
             if entry.voice_id in known:
                 voice_map[entry.character] = entry.voice_id
             tone_map[entry.character] = entry.tone
+            # Same rule as the primary voice: a chorus voice the provider no
+            # longer publishes is dropped rather than sent to be refused.
+            extra = [v for v in entry.chorus_voice_ids if v in known]
+            if extra:
+                chorus_map[entry.character] = extra
 
-    return voice_map, tone_map
+    return voice_map, tone_map, chorus_map
 
 
 def _get_scene_or_404(
@@ -321,9 +329,16 @@ async def render_audio(
     # Per-scene knobs the timeline editor wrote; a re-render after an edit is
     # what makes that edit audible.
     settings = repo.get_render_settings(project.id, ordinal)
-    voice_map, tone_map = await _voice_map(scene, tts, repo.get_casting(project.id))
+    voice_map, tone_map, chorus_map = await _voice_map(
+        scene, tts, repo.get_casting(project.id)
+    )
     result, timing = await render_scene_audio_with_timing(
-        scene, voice_map, tts, settings=settings, tone_map=tone_map
+        scene,
+        voice_map,
+        tts,
+        settings=settings,
+        tone_map=tone_map,
+        chorus_map=chorus_map,
     )
     project.cost_spent_cents += estimated_cents
     wav_bytes = await _persist_wav(store, project.id, ordinal, result.wav_bytes)

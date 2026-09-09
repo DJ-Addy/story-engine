@@ -299,13 +299,13 @@ class TestFullScorecard:
         assert "/shotlist" in text
 
     def test_is_deterministic_for_the_same_input(self, proposal, voice_fit, judgment):
-        kwargs = dict(
-            project_title="The Lighthouse Wager",
-            casting=proposal,
-            voice_fit=voice_fit,
-            animatic=judgment,
-            generated_at=FIXED_TIME,
-        )
+        kwargs = {
+            "project_title": "The Lighthouse Wager",
+            "casting": proposal,
+            "voice_fit": voice_fit,
+            "animatic": judgment,
+            "generated_at": FIXED_TIME,
+        }
         assert render_full_scorecard(**kwargs) == render_full_scorecard(**kwargs)
 
     def test_wraps_inside_78_columns(self, proposal, voice_fit, judgment):

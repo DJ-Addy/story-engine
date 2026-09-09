@@ -598,3 +598,97 @@ class TestScorecard:
             f"/api/v1/projects/{project_id}/judge/scorecard", headers=headers_b
         )
         assert r.status_code == 404
+
+
+class TestOverrideCasting:
+    """The judge proposes; a director decides.
+
+    The proposer cannot know what the text never states — that Ulysses is a
+    man, that the Sirens are women — so it will sometimes be confidently wrong
+    about a part. This is the way to say otherwise.
+    """
+
+    def test_override_replaces_the_casting(self, client, sample_fountain):
+        headers = auth_headers(client)
+        project_id = project_with_script(client, headers, sample_fountain)
+
+        client.post(
+            f"/api/v1/projects/{project_id}/judge/casting",
+            json={"available_voices": POOL},
+            headers=headers,
+        )
+
+        body = {
+            "entries": [
+                {"character": None, "voice_id": "narr1", "voice_name": "Narrator"},
+                {
+                    "character": "MARA",
+                    "voice_id": "soft1",
+                    "voice_name": "Soft",
+                    "tone": "seductive",
+                    "chorus_voice_ids": ["narr1"],
+                },
+            ]
+        }
+        r = client.put(
+            f"/api/v1/projects/{project_id}/judge/casting", json=body, headers=headers
+        )
+        assert r.status_code == 200, r.text
+
+        got = client.get(
+            f"/api/v1/projects/{project_id}/judge/casting", headers=headers
+        ).json()
+        assert got["rationale"] == "Saved casting (manual)."
+        mara = next(e for e in got["entries"] if e["character"] == "MARA")
+        assert mara["voice_id"] == "soft1"
+        assert mara["tone"] == "seductive"
+        # A person decided, so there is nothing left to be uncertain about.
+        assert mara["confidence"] == 1.0
+
+    def test_the_chorus_survives_the_round_trip(self, client, sample_fountain):
+        headers = auth_headers(client)
+        project_id = project_with_script(client, headers, sample_fountain)
+        client.put(
+            f"/api/v1/projects/{project_id}/judge/casting",
+            json={
+                "entries": [
+                    {
+                        "character": "MARA",
+                        "voice_id": "soft1",
+                        "chorus_voice_ids": ["narr1", "soft1"],
+                    }
+                ]
+            },
+            headers=headers,
+        )
+        got = client.get(
+            f"/api/v1/projects/{project_id}/judge/casting", headers=headers
+        ).json()
+        mara = next(e for e in got["entries"] if e["character"] == "MARA")
+        assert mara["chorus_voice_ids"] == ["narr1", "soft1"]
+
+    def test_casting_an_unknown_character_is_422(self, client, sample_fountain):
+        """A typo would leave a casting the renderer silently never consults."""
+        headers = auth_headers(client)
+        project_id = project_with_script(client, headers, sample_fountain)
+        r = client.put(
+            f"/api/v1/projects/{project_id}/judge/casting",
+            json={"entries": [{"character": "NOBODY", "voice_id": "soft1"}]},
+            headers=headers,
+        )
+        assert r.status_code == 422
+        assert "NOBODY" in r.json()["detail"]
+
+    def test_override_needs_a_script(self, client):
+        headers = auth_headers(client)
+        project_id = client.post(
+            "/api/v1/projects",
+            json={"title": "Empty", "rights_attested": True},
+            headers=headers,
+        ).json()["id"]
+        r = client.put(
+            f"/api/v1/projects/{project_id}/judge/casting",
+            json={"entries": [{"character": None, "voice_id": "narr1"}]},
+            headers=headers,
+        )
+        assert r.status_code == 404

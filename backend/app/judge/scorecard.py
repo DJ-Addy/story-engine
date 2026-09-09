@@ -160,8 +160,8 @@ def _tone_row(entry: CastingProposalEntry) -> list[str]:
         )
     evidence = _TONE_EVIDENCE_PHRASE.get(
         entry.tone_evidence,
-        "the evidence tier is not recorded with the saved casting; the sentence "
-        "under 'why' names what the script showed",
+        "which tier of evidence argued for it is not recorded; see the sentence "
+        "under 'why', which names what the script showed",
     )
     return _field("tone", f"'{entry.tone}' — {evidence}")
 

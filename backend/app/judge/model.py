@@ -95,6 +95,10 @@ class CastingProposalEntry(BaseModel):
     confidence: float = Field(ge=0.0, le=1.0)
     voice_fit: float = Field(ge=0.0, le=1.0)
     line_count: int = 0
+    # Voices the part is spoken by in addition to , mixed into one
+    # clip. Carried on the response so a caller can see a chorus it set, and a
+    # UI can show one it did not.
+    chorus_voice_ids: list[str] = Field(default_factory=list)
     rationale: str
 
 

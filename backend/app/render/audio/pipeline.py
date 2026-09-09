@@ -9,6 +9,7 @@ placeholder tone of the reported duration so tests stay meaningful.
 from __future__ import annotations
 
 import asyncio
+import math
 import os
 
 import numpy as np
@@ -111,6 +112,55 @@ def _build_sfx_bus(
     return bus, placed
 
 
+# Level applied to each take when a part is spoken by more than one voice.
+# 1/sqrt(n) keeps a chorus roughly as loud as a solo instead of clipping into
+# the limiter, which would flatten the very blend it is there to create.
+def _chorus_gain(n: int) -> float:
+    return 1.0 / math.sqrt(max(1, n))
+
+
+# Each extra voice starts this many milliseconds after the one before it. Exactly
+# together reads as one doubled voice with a phasing artefact; a hair apart reads
+# as several people saying the same thing, which is what a chorus is.
+_CHORUS_STAGGER_MS = 28
+
+
+class _SpokenLine:
+    """One line's takes: the primary voice, plus any chorus voices behind it."""
+
+    def __init__(self, primary: TTSResult, extras: list[TTSResult]) -> None:
+        self.primary = primary
+        self.extras = extras
+
+    def samples(self) -> np.ndarray:
+        base = _clip_samples(self.primary)
+        if not self.extras:
+            return base
+        gain = _chorus_gain(1 + len(self.extras))
+        mixed = base * gain
+        for index, extra in enumerate(self.extras, start=1):
+            take = _clip_samples(extra) * gain
+            offset = round(index * _CHORUS_STAGGER_MS * dsp.SR / 1000)
+            # Truncate rather than extend: a longer take from a faster voice
+            # must not stretch the clip the timeline was planned against.
+            room = len(mixed) - offset
+            if room <= 0:
+                continue
+            mixed[offset : offset + min(room, len(take))] += take[:room]
+        return mixed.astype(np.float32)
+
+
+async def _speak(synthesize, text: str, voice_id: str, emotion, chorus_ids: list[str]):
+    """Synthesize one line in its voice, and in each chorus voice beside it."""
+    primary = await synthesize(text, voice_id, emotion)
+    if not chorus_ids:
+        return _SpokenLine(primary, [])
+    extras = await asyncio.gather(
+        *(synthesize(text, voice, emotion) for voice in chorus_ids)
+    )
+    return _SpokenLine(primary, list(extras))
+
+
 def _clip_samples(result: TTSResult) -> np.ndarray:
     """Decode a TTSResult to samples at dsp.SR, tolerating non-WAV payloads."""
     try:
@@ -130,12 +180,13 @@ async def render_scene_audio(
     seed: int = 7,
     settings: SceneRenderSettings | None = None,
     tone_map: dict[str | None, str | None] | None = None,
+    chorus_map: dict[str | None, list[str]] | None = None,
 ) -> SceneRenderResult:
     """Render a scene to a mixed WAV. Backward-compatible thin wrapper around
     :func:`render_scene_audio_with_timing` that discards the timing payload; the
     audio bytes are byte-identical to that function's (same code path)."""
     result, _timing = await render_scene_audio_with_timing(
-        scene, voice_map, tts, seed, settings, tone_map
+        scene, voice_map, tts, seed, settings, tone_map, chorus_map
     )
     return result
 
@@ -147,6 +198,7 @@ async def render_scene_audio_with_timing(
     seed: int = 7,
     settings: SceneRenderSettings | None = None,
     tone_map: dict[str | None, str | None] | None = None,
+    chorus_map: dict[str | None, list[str]] | None = None,
 ) -> tuple[SceneRenderResult, SceneTiming]:
     """Render a scene AND expose the per-clip placement used to build it.
 
@@ -179,6 +231,7 @@ async def render_scene_audio_with_timing(
             )
 
     tones = tone_map or {}
+    chorus = chorus_map or {}
     # Kept per line so the timeline can report the emotion each clip was
     # actually synthesized with. Reporting line.emotion there instead would
     # show null for a clip the casting delivered as 'calm' - a timeline that
@@ -194,10 +247,16 @@ async def render_scene_audio_with_timing(
         # emotion of None and an absent one mean the same thing here: no cue.
         emotion = line.emotion or tones.get(speaker)
         effective_emotions.append(emotion)
-        tasks.append(synthesize(line.text, voice_id, emotion))
-    results = await asyncio.gather(*tasks)
+        tasks.append(
+            _speak(synthesize, line.text, voice_id, emotion, chorus.get(speaker, []))
+        )
+    spoken = await asyncio.gather(*tasks)
 
-    sample_arrays = [_clip_samples(result) for result in results]
+    # The primary take carries the clip's identity - its duration is the
+    # clip's duration, and the speech bus is planned from it - so a chorus
+    # voice is mixed into that take rather than extending it.
+    results = [take.primary for take in spoken]
+    sample_arrays = [take.samples() for take in spoken]
 
     # Measured durations, then the shared block-grouping rule the estimator
     # also uses (app.render.audio.timing.speech_clips).
