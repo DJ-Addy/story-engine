@@ -128,9 +128,33 @@ message naming the missing variable rather than a blank screen.
 | Video | `POST /projects/{id}/render/video`, `GET /render/video/{scene}/{shot}` |
 | Judges | `POST /projects/{id}/judge/voices`, `/judge/animatic`, `/judge/rank/voices`, `/judge/rank/animatic` |
 | Agent | `GET /api/v1/agent/network`, `POST /projects/{id}/agent/run`, `/agent/run/stream` |
+| Casting decision | `POST\|GET /projects/{id}/judge/casting` — the judge reads the script and decides a voice **and a tone** per part; the renderer obeys it |
+| Boards (animatic) | `POST\|GET /scenes/{n}/shots/{s}/board`, `POST\|GET /scenes/{n}/boards` — a Gemini-drawn frame per shot |
 | Analytics | `GET /projects/{id}/analytics/dashboard` + 8 panel routes |
 
 Interactive docs at `/docs`.
+
+## The walkthrough
+
+`/pipeline` is the guided path a reviewer should take — seven steps in the order
+the work happens, each reading its state live from the API and saying what it
+costs before it is pressed:
+
+1. **Manuscript → story graph.** `/new` takes a screenplay or a book. The sample
+   is Book XII of the Odyssey, converted from Butler's prose.
+2. **Cast a voice and a tone for every part.** The judge reads the lines and
+   decides; where the text gives no signal it says so rather than guessing.
+3. **Shot list from the agent network.** A Gemini coordinator delegates to the
+   shot designer and the previz critic; their tools are the real pipeline.
+4. **Render the audio.** Every line in the cast voice with the cast tone, over
+   an ambience bed with effects cut to the words. The workspace plays it.
+5. **Animatic.** One drawn frame per shot, cut to the audio — cents per board.
+6. **Video.** Veo renders a shot, animating from its board when one exists.
+7. **ClickHouse.** Every judgement, render and cost decision, read back into
+   the dashboard.
+
+The program monitor's **Animatic | Video** switch is the same choice at shot
+level: a board is the cheap first step, and Veo upgrades it.
 
 ---
 
