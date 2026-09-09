@@ -106,6 +106,9 @@ export default function MiniTransport({
   const isPlaying = useTimelineStore((s) => s.isPlaying);
   const hasData = useTimelineStore((s) => s.data !== null);
   const togglePlay = useTimelineStore((s) => s.togglePlay);
+  const muted = useTimelineStore((s) => s.muted);
+  const audioAvailable = useTimelineStore((s) => s.audioAvailable);
+  const toggleMuted = useTimelineStore((s) => s.toggleMuted);
 
   return (
     <div className="flex items-center gap-3">
@@ -117,6 +120,7 @@ export default function MiniTransport({
           togglePlay();
         }}
         disabled={!hasData}
+        data-tour="play"
         aria-label={isPlaying ? "Pause" : "Play"}
         className={`flex h-[26px] w-[26px] shrink-0 items-center justify-center rounded-[7px] bg-amber-400 text-zinc-950 transition-colors hover:bg-amber-300 disabled:cursor-not-allowed disabled:opacity-40 ${FOCUS_RING}`}
       >
@@ -142,6 +146,47 @@ export default function MiniTransport({
       )}
       <Total />
       <TimingSourceChip />
+
+      {/* Sound. This bar is what the default view shows, so it must carry the
+          one control that stops the mix — and say "no render" honestly when
+          there is nothing to mute rather than implying a sound that does not
+          exist. Sound is on by default: the point of the render is hearing it. */}
+      <button
+        type="button"
+        data-tour="mute"
+        onClick={() => {
+          if (muted) onActivateAudio();
+          toggleMuted();
+        }}
+        disabled={!hasData || !audioAvailable}
+        aria-pressed={!muted}
+        aria-label={muted ? "Unmute the rendered mix" : "Mute the rendered mix"}
+        title={
+          audioAvailable
+            ? undefined
+            : "No audio rendered for this scene yet — render it from the pipeline"
+        }
+        className={`flex shrink-0 items-center gap-1 rounded-[7px] border px-1.5 py-[3px] font-mono text-[9px] uppercase tracking-wider transition-colors disabled:cursor-not-allowed disabled:opacity-40 ${
+          !audioAvailable
+            ? "border-[var(--hairline)] text-zinc-600"
+            : muted
+              ? "border-[var(--hairline)] bg-[var(--surface-3)] text-zinc-400 hover:text-zinc-100"
+              : "border-amber-500/40 bg-amber-500/10 text-amber-200"
+        } ${FOCUS_RING}`}
+      >
+        {muted || !audioAvailable ? (
+          <svg viewBox="0 0 24 24" className="h-3 w-3" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+            <path d="M11 5 6 9H3v6h3l5 4V5Z" />
+            <path d="m17 9 4 6M21 9l-4 6" />
+          </svg>
+        ) : (
+          <svg viewBox="0 0 24 24" className="h-3 w-3" fill="none" stroke="currentColor" strokeWidth="1.8" strokeLinecap="round" strokeLinejoin="round" aria-hidden>
+            <path d="M11 5 6 9H3v6h3l5 4V5Z" />
+            <path d="M16 9a4 4 0 0 1 0 6M19 6a8 8 0 0 1 0 12" />
+          </svg>
+        )}
+        {!audioAvailable ? "no render" : muted ? "muted" : "sound"}
+      </button>
 
       {children && <div className="ml-auto flex shrink-0 items-center gap-2">{children}</div>}
     </div>
