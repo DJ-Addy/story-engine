@@ -392,6 +392,7 @@ def test_scene_boards_renders_all_then_skips_then_force(
         "rendered": [],
         "skipped": [1, 2],
         "total_cost_cents": 0,
+        "failed": [],
     }
     assert len(fake_image.calls) == 2
 
@@ -463,8 +464,14 @@ def test_scene_boards_keeps_frames_rendered_before_a_failure(repo, sample_founta
         project_id = setup_project(client, headers, sample_fountain, n_shots=2)
 
         r = render_scene_boards(client, headers, project_id)
-        assert r.status_code == 503
-        # Shot 1 was paid for and is kept; shot 2 never arrived.
+        # The batch does not stop at the failure: what was drawn is kept and
+        # booked, and the failed shot is reported with the provider's reason,
+        # so an animatic missing one frame is delivered rather than aborted.
+        assert r.status_code == 201
+        body = r.json()
+        assert [b["shot_ordinal"] for b in body["rendered"]] == [1]
+        assert [f["shot_ordinal"] for f in body["failed"]] == [2]
+        assert body["failed"][0]["detail"]
         assert repo.get_shot_frame(project_id, 1, 1) is not None
         assert repo.get_shot_frame(project_id, 1, 2) is None
         assert repo.get_project(project_id).cost_spent_cents == 4
@@ -473,6 +480,7 @@ def test_scene_boards_keeps_frames_rendered_before_a_failure(repo, sample_founta
         retry = render_scene_boards(client, headers, project_id)
         assert retry.status_code == 201
         assert [b["shot_ordinal"] for b in retry.json()["rendered"]] == [2]
+        assert retry.json()["failed"] == []
         assert retry.json()["skipped"] == [1]
         assert repo.get_project(project_id).cost_spent_cents == 8
 
@@ -616,3 +624,51 @@ def test_render_video_after_board_uses_image_path(client, fake_video, sample_fou
     assert r.status_code == 201
     assert r.json()["source"] == "image"
     assert fake_video.calls[-1]["has_image"] is True
+
+
+
+class _BlocksFirstPrompt(_RecordingImage):
+    """A content block on the first attempt, success on the retry.
+
+    Mirrors the live failure: the shot designer wrote "men bind Ulysses to
+    the mast", and the image model answered `no candidates (blocked: SAFETY)`.
+    """
+
+    def __init__(self) -> None:
+        super().__init__()
+        self._blocked_once = False
+
+    async def generate(self, prompt: str, seed: int, params: dict):
+        if not self._blocked_once:
+            self._blocked_once = True
+            self.calls.append({"prompt": prompt, "seed": seed, "params": dict(params)})
+            raise TerminalProviderError("gemini-image returned no candidates (blocked: SAFETY)")
+        return await super().generate(prompt, seed, params)
+
+
+def test_a_safety_block_is_retried_once_without_the_intent(repo, sample_fountain):
+    image = _BlocksFirstPrompt()
+    with _build_client(repo, image) as client:
+        headers = auth_headers(client)
+        project_id = setup_project(client, headers, sample_fountain, n_shots=1)
+
+        r = render_board(client, headers, project_id)
+        assert r.status_code == 201, r.text
+        assert len(image.calls) == 2
+        first, second = image.calls[0]["prompt"], image.calls[1]["prompt"]
+        # The retry is a different, shorter prompt that keeps the frame's
+        # composition (the style suffix survives) and drops the free text.
+        assert second != first
+        assert len(second) < len(first)
+        assert "storyboard" in second.lower()
+        assert repo.get_shot_frame(project_id, 1, 1) is not None
+        # Paid once: the blocked attempt cost nothing in the ledger.
+        assert repo.get_project(project_id).cost_spent_cents == 4
+
+
+def test_a_non_safety_terminal_error_is_not_retried(repo, sample_fountain):
+    with _build_client(repo, FakeImage(terminal_fail=True)) as client:
+        headers = auth_headers(client)
+        project_id = setup_project(client, headers, sample_fountain, n_shots=1)
+        assert render_board(client, headers, project_id).status_code == 503
+        assert repo.get_shot_frame(project_id, 1, 1) is None

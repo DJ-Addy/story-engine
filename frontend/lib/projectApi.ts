@@ -242,6 +242,8 @@ export interface SceneBoardsOut {
   rendered: BoardRenderOut[];
   skipped: number[];
   total_cost_cents: number;
+  /** Shots the provider refused, with its reason. The rest were still drawn. */
+  failed: { shot_ordinal: number; detail: string }[];
 }
 
 /** Which shots of a scene already have a frame. */

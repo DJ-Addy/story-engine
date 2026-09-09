@@ -41,6 +41,10 @@ export class TimelineAudioEngine {
     el.preload = "auto";
     el.muted = this.muted;
     this.el = el;
+    // The element is never attached to the DOM, so nothing can inspect it.
+    // Exposed for diagnosis ("is the mix loaded? is it playing?") — the
+    // answer to "the Odyssey has no sound" should be readable, not inferred.
+    (window as unknown as { __timelineAudio?: HTMLAudioElement }).__timelineAudio = el;
     return el;
   }
 

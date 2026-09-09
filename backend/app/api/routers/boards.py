@@ -31,7 +31,7 @@ from time import perf_counter
 
 from fastapi import APIRouter, Depends, HTTPException, Response
 
-from app.adapters.base import ImageProvider
+from app.adapters.base import ImageProvider, ProviderError, TerminalProviderError
 from app.analytics.events import CostEvent, RenderEvent, new_run_id
 from app.analytics.recorder import EventRecorder
 from app.api.deps import get_image, get_owned_project, get_repo
@@ -39,6 +39,7 @@ from app.api.repo import ProjectRecord, Repository
 from app.api.routers.analytics import emit, get_analytics_recorder
 from app.api.routers.renders import _get_scene_or_404, _get_shot_or_404, _shot_prompt
 from app.api.schemas import (
+    BoardFailure,
     BoardRenderOut,
     SceneBoardsOut,
     SceneBoardsRequest,
@@ -47,6 +48,7 @@ from app.api.schemas import (
 from app.costs import governor
 from app.ingest.elements import NormalizedScene
 from app.shotlist.schema import ShotSpec
+from app.render.visual.prompts import SIZE_PHRASES
 
 router = APIRouter(prefix="/projects/{project_id}", tags=["boards"])
 
@@ -62,6 +64,27 @@ _BOARD_STYLE = (
 
 def _board_prompt(shot: ShotSpec, scene: NormalizedScene) -> str:
     return _shot_prompt(shot, scene) + _BOARD_STYLE
+
+
+def _safe_board_prompt(shot: ShotSpec, scene: NormalizedScene) -> str:
+    """The same frame without the shot's intent line.
+
+    The intent is free text the shot designer wrote, and a phrase like "men
+    bind Ulysses to the mast" is exactly what an image model's safety filter
+    trips on. Size, subjects and setting describe the same picture without the
+    sentence that reads as violence out of context, so a blocked shot gets a
+    second chance at a board rather than a hole in the animatic.
+    """
+    parts: list[str] = [SIZE_PHRASES.get(shot.size, shot.size)]
+    if shot.subjects:
+        parts.append("of " + ", ".join(shot.subjects))
+    setting = scene.slugline or scene.location
+    if setting:
+        parts.append(f"at {setting}")
+    if scene.time_of_day:
+        parts.append(scene.time_of_day)
+    parts.append(_BOARD_STYLE)
+    return ", ".join(parts)
 
 
 def _board_seed(project_id: str, scene_ordinal: int, shot_ordinal: int) -> int:
@@ -171,7 +194,14 @@ async def _render_board(
     seed = _board_seed(project.id, scene.ordinal, shot.ordinal)
 
     started = perf_counter()
-    result = await image.generate(prompt, seed, {})
+    try:
+        result = await image.generate(prompt, seed, {})
+    except TerminalProviderError as exc:
+        # One retry, prompt softened, only for a content block. Any other
+        # terminal error (bad model id, auth) would fail identically again.
+        if "SAFETY" not in str(exc).upper() and "BLOCK" not in str(exc).upper():
+            raise
+        result = await image.generate(_safe_board_prompt(shot, scene), seed, {})
     latency_ms = int((perf_counter() - started) * 1000)
 
     project.cost_spent_cents += estimated_cents
@@ -304,17 +334,27 @@ async def render_scene_boards(
             )
             raise _cap_exceeded(exc) from exc
 
+    # A provider failure on one shot does not end the batch. Every frame that
+    # was drawn is already persisted and booked; the failed shot is reported
+    # with the provider's own reason so the caller can re-prompt just that one.
+    # The governor is the exception: a 402 from a later shot means the cap is
+    # reached, and nothing after it could be bought either.
     rendered: list[BoardRenderOut] = []
+    failed: list[BoardFailure] = []
     for shot in pending:
-        rendered.append(
-            await _render_board(project, repo, image, recorder, scene, shot, run_id)
-        )
+        try:
+            rendered.append(
+                await _render_board(project, repo, image, recorder, scene, shot, run_id)
+            )
+        except ProviderError as exc:
+            failed.append(BoardFailure(shot_ordinal=shot.ordinal, detail=str(exc)))
 
     return SceneBoardsOut(
         scene_ordinal=scene_ordinal,
         rendered=rendered,
         skipped=skipped,
         total_cost_cents=sum(board.cost_cents for board in rendered),
+        failed=failed,
     )
 
 

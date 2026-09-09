@@ -252,11 +252,21 @@ class SceneBoardsRequest(BaseModel):
     force: bool = False
 
 
+class BoardFailure(BaseModel):
+    shot_ordinal: int
+    detail: str
+
+
 class SceneBoardsOut(BaseModel):
     scene_ordinal: int
     rendered: list[BoardRenderOut]
     skipped: list[int]  # shot ordinals left alone because a frame already existed
     total_cost_cents: int
+    # Shots the provider refused or failed on, with its reason. The batch keeps
+    # going past them: an animatic missing one frame is worth more than one
+    # that stops at the first refusal, and the caller can see exactly which
+    # shot to re-prompt.
+    failed: list[BoardFailure] = Field(default_factory=list)
 
 
 class SceneBoardsStatus(BaseModel):

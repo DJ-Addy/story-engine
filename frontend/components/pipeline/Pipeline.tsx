@@ -126,6 +126,7 @@ export default function Pipeline() {
   const [busy, setBusy] = useState<string | null>(null);
   const [stepError, setStepError] = useState<Record<string, string>>({});
   const [agentRun, setAgentRun] = useState<AgentRun | null>(null);
+  const [boardFailures, setBoardFailures] = useState<{ shot_ordinal: number; detail: string }[]>([]);
   const [featuredShot, setFeaturedShot] = useState<number>(1);
   const [thumbs, setThumbs] = useState<Record<number, string>>({});
   const [reloads, setReloads] = useState(0);
@@ -477,7 +478,12 @@ export default function Pipeline() {
                 <button
                   className={`${BTN} ${FOCUS_RING}`}
                   disabled={!loaded?.shots?.length || busy !== null}
-                  onClick={() => run("boards", "boards", () => renderSceneBoards(pid!, scene))}
+                  onClick={() =>
+                    run("boards", "boards", async () => {
+                      const out = await renderSceneBoards(pid!, scene);
+                      setBoardFailures(out.failed ?? []);
+                    })
+                  }
                 >
                   {boardsDone > 0 && boardsDone < boardsTotal ? "Draw the remaining boards" : "Draw the boards"}
                 </button>
@@ -510,6 +516,15 @@ export default function Pipeline() {
                   ) : null,
                 )}
               </div>
+            )}
+            {boardFailures.length > 0 && (
+              <ul className="text-rose-300">
+                {boardFailures.map((f) => (
+                  <li key={f.shot_ordinal}>
+                    shot {f.shot_ordinal}: {f.detail}
+                  </li>
+                ))}
+              </ul>
             )}
             {err("boards") && <p className="text-rose-300">{err("boards")}</p>}
           </Step>
