@@ -61,6 +61,14 @@ class _CapturingRecorder:
         return len(batch)
 
 
+@pytest.fixture(autouse=True)
+def _instant_retries(monkeypatch):
+    """The board route backs off for real seconds on a 429; not in tests."""
+    from app.api.routers import boards
+
+    monkeypatch.setattr(boards, "_IMAGE_BASE_DELAY_S", 0.0)
+
+
 @pytest.fixture
 def repo():
     return InMemoryRepository()
@@ -358,8 +366,8 @@ def test_render_board_retryable_error_502(repo, sample_fountain):
     with _build_client(repo, FakeImage(fail_times=1)) as client:
         headers = auth_headers(client)
         project_id = setup_project(client, headers, sample_fountain)
-        assert render_board(client, headers, project_id).status_code == 502
-        # The injected failure is spent; the retry goes through.
+        # A transient failure is retried inside the request (a per-minute
+        # quota is the expected shape of it), so the first call succeeds.
         assert render_board(client, headers, project_id).status_code == 201
 
 

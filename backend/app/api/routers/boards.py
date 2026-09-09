@@ -46,11 +46,18 @@ from app.api.schemas import (
     SceneBoardsStatus,
 )
 from app.costs import governor
+from app.costs.retry import run_with_retries
 from app.ingest.elements import NormalizedScene
 from app.shotlist.schema import ShotSpec
 from app.render.visual.prompts import SIZE_PHRASES
 
 router = APIRouter(prefix="/projects/{project_id}", tags=["boards"])
+
+# Retry budget for one board. 5 attempts from an 8s base wait about two
+# minutes at most (8 + 16 + 32 + 64), which spans a per-minute quota with room
+# for the jitter. Tests set the base to zero through these names.
+_IMAGE_MAX_ATTEMPTS = 5
+_IMAGE_BASE_DELAY_S = 8.0
 
 # Appended to the shot's video prompt: same subjects/size/setting so the board
 # and the clip agree, plus the constraints that make a still usable as a
@@ -193,15 +200,27 @@ async def _render_board(
     prompt = _board_prompt(shot, scene)
     seed = _board_seed(project.id, scene.ordinal, shot.ordinal)
 
+    # A 429 from the image model is a per-minute quota, and a scene is a dozen
+    # calls in a row, so hitting it mid-batch is expected rather than
+    # exceptional. The budget here is sized like the TTS renderer's: enough
+    # attempts, from a long enough base, to wait out a minute-long window.
+    async def _generate(text: str):
+        return await run_with_retries(
+            lambda: image.generate(text, seed, {}),
+            max_attempts=_IMAGE_MAX_ATTEMPTS,
+            base_delay_s=_IMAGE_BASE_DELAY_S,
+            jitter=True,
+        )
+
     started = perf_counter()
     try:
-        result = await image.generate(prompt, seed, {})
+        result = await _generate(prompt)
     except TerminalProviderError as exc:
         # One retry, prompt softened, only for a content block. Any other
         # terminal error (bad model id, auth) would fail identically again.
         if "SAFETY" not in str(exc).upper() and "BLOCK" not in str(exc).upper():
             raise
-        result = await image.generate(_safe_board_prompt(shot, scene), seed, {})
+        result = await _generate(_safe_board_prompt(shot, scene))
     latency_ms = int((perf_counter() - started) * 1000)
 
     project.cost_spent_cents += estimated_cents
