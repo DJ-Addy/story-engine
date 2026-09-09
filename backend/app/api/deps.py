@@ -7,6 +7,7 @@ from fastapi.security import HTTPAuthorizationCredentials, HTTPBearer
 
 from app import config  # noqa: F401  # loads backend/.env before env reads
 from app.adapters.base import (
+    ImageProvider,
     LLMProvider,
     TerminalProviderError,
     TTSProvider,
@@ -112,6 +113,27 @@ def get_video() -> VideoProvider:
     from app.adapters.veo import VeoAdapter
 
     return VeoAdapter()
+
+
+def get_image() -> ImageProvider:
+    """Default storyboard renderer: Gemini image generation on Vertex AI.
+
+    Same credential-based selection and lazy import as ``get_video``. Unlike
+    Veo this model is served from the ``global`` endpoint, so no region knob is
+    needed. Raises when no Google Cloud project is configured; tests override
+    this with app.adapters.fake.FakeImage via app.dependency_overrides.
+    """
+    import os
+
+    if not os.environ.get("GOOGLE_CLOUD_PROJECT"):
+        raise TerminalProviderError(
+            "no image provider configured (set GOOGLE_CLOUD_PROJECT and "
+            "GOOGLE_APPLICATION_CREDENTIALS)"
+        )
+
+    from app.adapters.gemini_image import GeminiImageAdapter
+
+    return GeminiImageAdapter()
 
 
 def get_llm() -> LLMProvider:

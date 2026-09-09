@@ -233,6 +233,40 @@ class VideoRenderOut(BaseModel):
     has_video: bool  # whether downloaded clip bytes are stored
 
 
+class BoardRenderOut(BaseModel):
+    """One storyboard frame rendered for a shot (the still half of a render)."""
+
+    scene_ordinal: int
+    shot_ordinal: int
+    cost_cents: int
+    provider: str
+    model: str
+    # Boards are text-to-image today; a reference-conditioned path would add
+    # "image" here the way VideoRenderOut.source distinguishes the two.
+    source: Literal["text"]
+
+
+class SceneBoardsRequest(BaseModel):
+    # Shots that already have a frame are skipped unless force is set, so a
+    # re-run after a partial failure finishes the scene without paying twice.
+    force: bool = False
+
+
+class SceneBoardsOut(BaseModel):
+    scene_ordinal: int
+    rendered: list[BoardRenderOut]
+    skipped: list[int]  # shot ordinals left alone because a frame already existed
+    total_cost_cents: int
+
+
+class SceneBoardsStatus(BaseModel):
+    """Read-only progress for a scene's boards; what the pipeline page opens on."""
+
+    scene_ordinal: int
+    rendered: list[int]  # shot ordinals that have a frame, ascending
+    total: int  # shots in the saved shot list (0 when none has been posted)
+
+
 class StoryGraphOut(StoryGraph):
     """Response model for GET .../graph; identical shape to the ingest model."""
 

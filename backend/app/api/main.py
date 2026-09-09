@@ -27,6 +27,7 @@ from app.api.routers import (
     analytics,
     assist,
     auth,
+    boards,
     demo,
     judge,
     novel,
@@ -137,6 +138,9 @@ def create_app() -> FastAPI:
     # that spends provider credits.
     api.include_router(assist.router)
     api.include_router(renders.router)
+    # Boards are the still half of the render pipeline: a frame stored here
+    # is what flips renders.router's Veo call to image-to-video.
+    api.include_router(boards.router)
     api.include_router(judge.router)
     api.include_router(analytics.router)
     # Two routers, one module: the runs are project-scoped, the network
