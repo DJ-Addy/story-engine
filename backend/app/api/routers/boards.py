@@ -59,6 +59,17 @@ router = APIRouter(prefix="/projects/{project_id}", tags=["boards"])
 _IMAGE_MAX_ATTEMPTS = 5
 _IMAGE_BASE_DELAY_S = 8.0
 
+# How many fresh samples to try, with the softened prompt, after a content
+# block. Two: enough to get past a refusal that was about the sample rather
+# than the subject, few enough that a subject the model will not draw at all
+# fails in cents rather than dollars.
+_SAFETY_RESAMPLES = 2
+
+
+def _is_content_block(exc: BaseException) -> bool:
+    text = str(exc).upper()
+    return "SAFETY" in text or "BLOCK" in text
+
 # Appended to the shot's video prompt: same subjects/size/setting so the board
 # and the clip agree, plus the constraints that make a still usable as a
 # storyboard frame. Burned-in text or watermarks would be carried straight
@@ -204,9 +215,9 @@ async def _render_board(
     # calls in a row, so hitting it mid-batch is expected rather than
     # exceptional. The budget here is sized like the TTS renderer's: enough
     # attempts, from a long enough base, to wait out a minute-long window.
-    async def _generate(text: str):
+    async def _generate(text: str, use_seed: int):
         return await run_with_retries(
-            lambda: image.generate(text, seed, {}),
+            lambda: image.generate(text, use_seed, {}),
             max_attempts=_IMAGE_MAX_ATTEMPTS,
             base_delay_s=_IMAGE_BASE_DELAY_S,
             jitter=True,
@@ -214,13 +225,30 @@ async def _render_board(
 
     started = perf_counter()
     try:
-        result = await _generate(prompt)
+        result = await _generate(prompt, seed)
     except TerminalProviderError as exc:
-        # One retry, prompt softened, only for a content block. Any other
-        # terminal error (bad model id, auth) would fail identically again.
-        if "SAFETY" not in str(exc).upper() and "BLOCK" not in str(exc).upper():
+        # Only a content block earns a retry; any other terminal error (bad
+        # model id, auth) would fail identically again.
+        if not _is_content_block(exc):
             raise
-        result = await _generate(_safe_board_prompt(shot, scene))
+        # The block is on what the model DREW, not only on the words: with the
+        # intent dropped, a prompt naming Ulysses in this scene still produced
+        # a man bound to a mast and was refused. So the softened prompt is
+        # tried with fresh seeds — a different sample, not the same one again.
+        # Each attempt is a few cents; a scene with a hole in it costs more.
+        safe = _safe_board_prompt(shot, scene)
+        last: TerminalProviderError = exc
+        result = None
+        for attempt in range(1, _SAFETY_RESAMPLES + 1):
+            try:
+                result = await _generate(safe, seed + attempt)
+                break
+            except TerminalProviderError as again:
+                if not _is_content_block(again):
+                    raise
+                last = again
+        if result is None:
+            raise last
     latency_ms = int((perf_counter() - started) * 1000)
 
     project.cost_spent_cents += estimated_cents

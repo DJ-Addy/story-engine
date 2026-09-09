@@ -680,3 +680,28 @@ def test_a_non_safety_terminal_error_is_not_retried(repo, sample_fountain):
         project_id = setup_project(client, headers, sample_fountain, n_shots=1)
         assert render_board(client, headers, project_id).status_code == 503
         assert repo.get_shot_frame(project_id, 1, 1) is None
+
+
+
+class _AlwaysBlocked(_RecordingImage):
+    async def generate(self, prompt: str, seed: int, params: dict):
+        self.calls.append({"prompt": prompt, "seed": seed, "params": dict(params)})
+        raise TerminalProviderError("gemini-image returned no candidates (blocked: SAFETY)")
+
+
+def test_a_persistent_block_is_resampled_then_given_up_on(repo, sample_fountain):
+    """The retry is a fresh sample, not the same one, and it is bounded."""
+    image = _AlwaysBlocked()
+    with _build_client(repo, image) as client:
+        headers = auth_headers(client)
+        project_id = setup_project(client, headers, sample_fountain, n_shots=1)
+        r = render_board(client, headers, project_id)
+        assert r.status_code == 503
+        assert "SAFETY" in r.json()["detail"]
+        # Original prompt once, then the softened prompt with distinct seeds.
+        assert len(image.calls) == 3
+        seeds = [c["seed"] for c in image.calls]
+        assert len(set(seeds)) == 3
+        assert image.calls[1]["prompt"] == image.calls[2]["prompt"] != image.calls[0]["prompt"]
+        assert repo.get_shot_frame(project_id, 1, 1) is None
+        assert repo.get_project(project_id).cost_spent_cents == 0
