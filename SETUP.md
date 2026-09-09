@@ -230,6 +230,30 @@ GOOGLE_TTS_MODEL=            # default: gemini-2.5-flash-tts
 GOOGLE_TTS_LANGUAGE_CODE=    # default: en-US
 ```
 
+**Newer models are a drop-in, and the id needs its suffix.** The adapter passes
+`GOOGLE_TTS_MODEL` straight through as the request's `modelName`, so moving to a
+newer Gemini-TTS model is one environment variable and no code change. What
+costs an afternoon is the naming: the model is `gemini-3.1-flash-tts-preview`,
+and `gemini-3.1-flash-tts` — the name without the suffix — answers a flat 404
+that reads exactly like "this model does not exist". Verified reachable from
+this project on three surfaces:
+
+| Model | Cloud TTS `text:synthesize` | Vertex `generateContent` |
+|---|---|---|
+| `gemini-2.5-flash-tts` | yes | yes (`global`) |
+| `gemini-2.5-pro-tts` | yes | yes (`global`) |
+| `gemini-3.1-flash-tts-preview` | yes | yes (`global`, `us-central1`) |
+
+The emotion path survives the move: `input.prompt` is accepted, and the curated
+voices resolve unchanged, so the casting judge's tone still drives delivery.
+This deployment runs 3.1, which rendered the sample scene in half the time 2.5
+took. It is a **preview** model — that is the whole of the risk in using it.
+
+One trap when probing: firing these requests back to back earns a per-minute
+quota rejection that arrives as `400` with a *content policy* message, which
+reads like a refused prompt rather than a rate limit. Space the calls a few
+seconds apart before concluding anything about what a model will not say.
+
 **There is no default voice.** `voice_id` is a required argument, chosen from
 eight curated Gemini-TTS voices (`google_tts.py:147-156`) — Charon, Iapetus,
 Puck, Enceladus, Kore, Aoede, Leda, Callirrhoe. `list_voices` is static and
