@@ -92,10 +92,67 @@ class TestDialogueBlocks:
         assert kinds(elements) == [
             ElementKind.CHARACTER_CUE,
             ElementKind.DIALOGUE,
-            ElementKind.DIALOGUE,
             ElementKind.ACTION,
         ]
-        assert elements[3].text == "She leaves."
+        # The blank line is what ends the block — which is this test's point.
+        # The two lines before it are ONE speech, not two: see
+        # test_wrapped_dialogue_is_one_speech for why that matters.
+        assert elements[1].text == "First line. Second line."
+        assert elements[2].text == "She leaves."
+
+    def test_wrapped_dialogue_is_one_speech(self) -> None:
+        """Lines are how a speech is typed, not how it is delivered.
+
+        A dialogue block runs to the next blank line, so its lines are one
+        speech however they were wrapped. Emitting one element per physical
+        line made the audio renderer synthesize each fragment separately: a
+        speech wrapped at column 78 became nine clips, each falling in pitch
+        at a line ending that was not a sentence ending, with a gap after it.
+        `fountain_writer` wraps the prose it converts, so every adapted novel
+        arrived pre-broken this way.
+        """
+        text = (
+            "MARA\n"
+            "My friends, it is not right that one or two of us alone should\n"
+            "know the prophecies that Circe has made me. I will therefore\n"
+            "tell you about them.\n"
+        )
+        elements = parse_fountain(text)
+        assert kinds(elements) == [ElementKind.CHARACTER_CUE, ElementKind.DIALOGUE]
+        assert elements[1].text == (
+            "My friends, it is not right that one or two of us alone should "
+            "know the prophecies that Circe has made me. I will therefore "
+            "tell you about them."
+        )
+
+    def test_a_parenthetical_divides_the_speech(self) -> None:
+        """A delivery note genuinely splits it, so the join must stop there."""
+        text = "MARA\nFirst part.\n(quietly)\nSecond part.\n"
+        elements = parse_fountain(text)
+        assert kinds(elements) == [
+            ElementKind.CHARACTER_CUE,
+            ElementKind.DIALOGUE,
+            ElementKind.PARENTHETICAL,
+            ElementKind.DIALOGUE,
+        ]
+        assert elements[1].text == "First part."
+        assert elements[3].text == "Second part."
+
+    def test_wrapped_action_is_one_paragraph(self) -> None:
+        """Narration wraps too, and read line by line it stutters the same way."""
+        text = (
+            "Rain hammers the cobblestones. A lone figure hurries past\n"
+            "shuttered stalls toward the lighthouse on the point.\n"
+            "\n"
+            "A separate paragraph.\n"
+        )
+        elements = parse_fountain(text)
+        assert kinds(elements) == [ElementKind.ACTION, ElementKind.ACTION]
+        assert elements[0].text == (
+            "Rain hammers the cobblestones. A lone figure hurries past "
+            "shuttered stalls toward the lighthouse on the point."
+        )
+        assert elements[1].text == "A separate paragraph."
 
 
 class TestTransitions:

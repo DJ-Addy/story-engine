@@ -68,7 +68,27 @@ def parse_fountain(text: str) -> list[RawElement]:
                 if stripped.startswith("(") and stripped.endswith(")")
                 else ElementKind.DIALOGUE
             )
-            elements.append(RawElement(kind=kind, text=stripped, source_line=lineno))
+            # A dialogue block runs to the next blank line, so its lines are ONE
+            # speech however they happen to be wrapped — that is the Fountain
+            # spec, and it is also the difference between a performance and a
+            # stutter. Emitting a line per physical line made the audio renderer
+            # synthesize each wrapped fragment as its own utterance: a speech
+            # broken at column 78 became nine clips, each falling in pitch at a
+            # line ending that is not a sentence ending, with a gap after it.
+            # `fountain_writer` wraps prose it converts, so every adapted novel
+            # arrived pre-broken this way.
+            #
+            # Rejoining with a space is exact: the wrapper split on whitespace,
+            # so nothing but the newline is being undone. A parenthetical ends
+            # the run, because the delivery note genuinely divides the speech.
+            if (
+                kind is ElementKind.DIALOGUE
+                and elements
+                and elements[-1].kind is ElementKind.DIALOGUE
+            ):
+                elements[-1].text = f"{elements[-1].text} {stripped}"
+            else:
+                elements.append(RawElement(kind=kind, text=stripped, source_line=lineno))
         elif stripped.startswith(".") and not stripped.startswith(".."):
             elements.append(
                 RawElement(
@@ -105,6 +125,13 @@ def parse_fountain(text: str) -> list[RawElement]:
                 )
             )
             in_dialogue = True
+        elif not prev_blank and elements and elements[-1].kind is ElementKind.ACTION:
+            # Action is paragraphs, not lines, for the same reason dialogue is
+            # speeches: the block runs to the next blank line. `prev_blank` is
+            # the test for "still inside one", so a paragraph the writer wrapped
+            # is rejoined and the narrator reads a sentence through instead of
+            # stopping wherever column 78 fell.
+            elements[-1].text = f"{elements[-1].text} {stripped}"
         else:
             elements.append(
                 RawElement(kind=ElementKind.ACTION, text=stripped, source_line=lineno)

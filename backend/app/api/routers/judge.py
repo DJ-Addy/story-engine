@@ -17,8 +17,9 @@ the response nothing and cannot fail it.
 
 from __future__ import annotations
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Response
 
+from app.adapters.base import Voice
 from app.analytics.events import animatic_events, ranking_events, voice_fit_events
 from app.analytics.recorder import EventRecorder
 from app.api.deps import get_owned_project, get_repo
@@ -43,6 +44,8 @@ from app.judge import (
     rank_animatics,
     rank_voice_fits,
 )
+from app.judge.model import AnimaticJudgment, VoiceFitResult
+from app.judge.scorecard import render_full_scorecard, scorecard_filename
 from app.shotlist.schema import SceneShotList
 
 router = APIRouter(prefix="/projects/{project_id}/judge", tags=["judge"])
@@ -223,3 +226,113 @@ def rank_animatic_endpoint(
         ),
     )
     return AnimaticRankingOut(**result.model_dump())
+
+
+# --------------------------------------------------------------------------- #
+# Scorecard: the same judgements, written out for a person
+# --------------------------------------------------------------------------- #
+# A saved casting is stored as app.api.repo.CastEntry, which keeps the voice's
+# id and name but not the provider tags it was chosen on — the catalogue those
+# came from is behind credentials this endpoint deliberately does not use. So
+# the fit is scored against tag-neutral voices, and the scorecard says so in
+# the reader's own words rather than passing a hollowed-out number off as a
+# tag-aware one.
+_TAGLESS_VOICES_NOTE = (
+    "One caveat on the numbers in this section: they were scored from the "
+    "casting as it is saved, which records each voice's id and name but not "
+    "the provider tags it was originally chosen on. The voice side of every "
+    "comparison therefore reads as tag-neutral, and what moves these scores is "
+    "the character side — line counts, delivery emotions, and how much of a "
+    "part is narration. For the tag-aware figure, re-score the casting through "
+    "POST /judge/voices with the provider's available_voices in the body."
+)
+
+
+async def _scorecard_text(project: ProjectRecord, repo: Repository) -> str:
+    """Assemble whatever this project has been judged on, as plain text.
+
+    Deliberately not an all-or-nothing report: a project that has been cast but
+    never shot-listed is the normal state halfway through a session, and a 404
+    there would tell a reviewer nothing about the half that *is* done. The only
+    hard failure is a project with no script, because then not one of the three
+    judges has anything to read.
+
+    No analytics row is written. The judgements here are recomputed from stored
+    material rather than newly decided, so emitting would inflate the ClickHouse
+    counts every time somebody refreshed the page.
+    """
+    graph = _get_graph_or_404(repo, project.id)
+
+    # The saved casting, read exactly as GET /judge/casting reports it, so the
+    # page and the API can never disagree about what this project renders with.
+    casting = get_decided_casting(project=project, repo=repo)
+
+    voice_fit: VoiceFitResult | None = None
+    note: str | None = None
+    if casting is not None:
+        cast_voices = {
+            entry.character: Voice(id=entry.voice_id, name=entry.voice_name, tags=[])
+            for entry in casting.entries
+            if entry.character is not None
+        }
+        if cast_voices:
+            # available_voices stays None so suggestions are drawn only from
+            # voices this casting actually uses: recommending a recast to a
+            # voice we cannot see the tags of would be advice with no evidence.
+            voice_fit = await judge_voice_fit(graph, cast_voices, llm=None)
+            note = _TAGLESS_VOICES_NOTE
+
+    shotlists: list[SceneShotList] = []
+    for scene in graph.scenes:
+        record = repo.get_shotlist(project.id, scene.ordinal)
+        if record is not None:
+            shotlists.append(record.shotlist)
+    animatic: AnimaticJudgment | None = (
+        judge_animatic(graph, shotlists, grammar_profile=project.grammar_profile)
+        if shotlists
+        else None
+    )
+
+    return render_full_scorecard(
+        project_title=project.title,
+        casting=casting,
+        voice_fit=voice_fit,
+        animatic=animatic,
+        voice_fit_note=note,
+    )
+
+
+@router.get("/scorecard")
+async def get_scorecard(
+    project: ProjectRecord = Depends(get_owned_project),
+    repo: Repository = Depends(get_repo),
+) -> Response:
+    """Every judge score this project has, explained in prose, as text/plain.
+
+    One URL a reviewer can open to see how each number was arrived at: what it
+    was computed from, and the judge's own sentence about it.
+    """
+    return Response(
+        content=await _scorecard_text(project, repo),
+        media_type="text/plain; charset=utf-8",
+    )
+
+
+@router.get("/scorecard.txt")
+async def download_scorecard(
+    project: ProjectRecord = Depends(get_owned_project),
+    repo: Repository = Depends(get_repo),
+) -> Response:
+    """The same page, offered as a file so a reviewer can keep a copy.
+
+    Byte-for-byte the body of ``GET /judge/scorecard`` (bar the timestamp in
+    its header); only the ``Content-Disposition`` differs, because a reviewer
+    who wants the scorecard in their notes and one who wants it on screen are
+    reading the same document.
+    """
+    filename = scorecard_filename(project.title)
+    return Response(
+        content=await _scorecard_text(project, repo),
+        media_type="text/plain; charset=utf-8",
+        headers={"Content-Disposition": f'attachment; filename="{filename}"'},
+    )
