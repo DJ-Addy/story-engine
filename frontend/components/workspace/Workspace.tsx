@@ -23,10 +23,11 @@ import { useCallback, useEffect, useState } from "react";
 import { useRouter, useSearchParams } from "next/navigation";
 import { api, type SceneData, type SceneSummary } from "@/lib/api";
 import type { TimelineData } from "@/lib/types";
+import { getToken } from "@/lib/apiClient";
 import { splitSceneRef } from "@/lib/sceneRef";
 import { useSceneStore } from "@/lib/store";
 import { useTimelineStore } from "@/lib/timelineStore";
-import { DEMO_REF, isDemoRef } from "@/lib/demoApi";
+import { DEMO_REF, isDemoRef, startDemoSession } from "@/lib/demoApi";
 import AppNav from "@/components/AppNav";
 import ApiModeBadge from "@/components/ApiModeBadge";
 import AssistantPanel from "@/components/assistant/AssistantPanel";
@@ -96,6 +97,19 @@ export default function Workspace() {
     let cancelled = false;
     const key = loadKey;
 
+    // A visitor with no token asking for the demo gets the demo session
+    // started for them, the same way the pipeline page does. The cold-start
+    // panel stays for the cases it was built for — nothing seeded, or a
+    // project this account does not own — but "you have not pressed the
+    // button yet" is not a state a reviewer should be shown.
+    const ready =
+      isDemoRef(projectRef) && !getToken()
+        ? startDemoSession().then(() => undefined, () => undefined)
+        : Promise.resolve();
+
+    ready.then(() => {
+    if (cancelled) return;
+
     api
       .getScene(sceneRef)
       .then((d) => {
@@ -119,11 +133,12 @@ export default function Workspace() {
         if (cancelled) return;
         setTimelineError({ key, error });
       });
+    });
 
     return () => {
       cancelled = true;
     };
-  }, [loadKey, sceneRef, loadScene, loadTimeline]);
+  }, [loadKey, sceneRef, projectRef, loadScene, loadTimeline]);
 
   // The rail is a property of the PROJECT, so it survives moving between that
   // project's scenes and is only refetched when the project changes. A failure
