@@ -10,9 +10,10 @@
 // top of that composition.
 
 import Link from "next/link";
-import { usePathname } from "next/navigation";
-import type { ReactNode } from "react";
+import { usePathname, useRouter } from "next/navigation";
+import { Suspense, type ReactNode } from "react";
 import { FOCUS_RING } from "@/components/casting/theme";
+import Tour, { startTour } from "@/components/tour/Tour";
 
 // Order is the order of the work: start with the guided pipeline, bring in a
 // manuscript, then the three surfaces the pipeline hands off to.
@@ -35,6 +36,7 @@ export default function AppNav({
   width?: string;
 }) {
   const pathname = usePathname();
+  const router = useRouter();
 
   return (
     <header className="sticky top-0 z-40 shrink-0 border-b border-[var(--hairline)] bg-[var(--cast-bg)]/85 backdrop-blur-md">
@@ -60,6 +62,7 @@ export default function AppNav({
                 <li key={s.href}>
                   <Link
                     href={s.href}
+                    data-tour={`nav-${s.label.toLowerCase().replace(/\s+/g, "-")}`}
                     aria-current={active ? "page" : undefined}
                     className={`inline-block rounded-md border px-2.5 py-1 text-xs transition-colors ${
                       active
@@ -74,10 +77,24 @@ export default function AppNav({
             })}
           </ul>
         </nav>
-        {children && (
-          <div className="ml-auto flex shrink-0 items-center gap-3">{children}</div>
-        )}
+        <div className="ml-auto flex shrink-0 items-center gap-3">
+          {children}
+          {/* Replays the guided tour from its first step. A first visit to the
+              pipeline starts it unprompted; this is for everyone after that. */}
+          <button
+            type="button"
+            onClick={() => startTour(router, pathname)}
+            className={`rounded-md border border-[var(--hairline)] px-2 py-1 font-mono text-[10px] uppercase tracking-wider text-zinc-400 transition-colors hover:border-amber-500/40 hover:text-amber-200 ${FOCUS_RING}`}
+          >
+            tour
+          </button>
+        </div>
       </div>
+      {/* The tour reads the URL, so it sits under its own boundary rather than
+          asking every page that mounts this bar to provide one. */}
+      <Suspense fallback={null}>
+        <Tour />
+      </Suspense>
     </header>
   );
 }

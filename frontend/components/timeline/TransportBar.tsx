@@ -86,6 +86,7 @@ export default function TransportBar({
           whileTap={tap}
           onClick={handlePlay}
           disabled={!hasData}
+          data-tour="play"
           aria-label={isPlaying ? "Pause" : "Play"}
           className={`flex h-9 w-9 items-center justify-center rounded-md bg-amber-400 text-zinc-950 shadow-[0_0_24px_-10px_rgba(251,191,36,0.7)] transition-colors hover:bg-amber-300 disabled:cursor-not-allowed disabled:opacity-40 disabled:shadow-none ${FOCUS_RING}`}
         >
@@ -159,6 +160,7 @@ export default function TransportBar({
         <motion.button
           whileTap={tap}
           onClick={handleMute}
+          data-tour="mute"
           disabled={!hasData || !audioAvailable}
           aria-pressed={!muted}
           title={

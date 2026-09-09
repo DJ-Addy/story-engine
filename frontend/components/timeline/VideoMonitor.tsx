@@ -447,6 +447,7 @@ export default function VideoMonitor() {
         {mode === "video" ? pill : boardPill}
         <div
           role="tablist"
+          data-tour="monitor-mode"
           aria-label="Monitor mode"
           className="ml-2 flex overflow-hidden rounded-md border border-[var(--hairline)]"
         >
@@ -475,7 +476,11 @@ export default function VideoMonitor() {
 
       {/* 16:9 stage. Always present, always the same size — the editor's layout
           never shifts because a render does or does not exist. */}
-      <div className="relative w-full overflow-hidden bg-black" style={{ aspectRatio: "16 / 9" }}>
+      <div
+        data-tour="monitor"
+        className="relative w-full overflow-hidden bg-black"
+        style={{ aspectRatio: "16 / 9" }}
+      >
         {/* No timeline yet */}
         {!data && <div className="cast-shimmer absolute inset-0" aria-busy />}
 

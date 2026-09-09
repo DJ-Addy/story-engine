@@ -74,6 +74,7 @@ function Step({
   pill,
   children,
   actions,
+  tour,
 }: {
   n: number;
   title: string;
@@ -81,9 +82,11 @@ function Step({
   pill: string;
   children: React.ReactNode;
   actions?: React.ReactNode;
+  /** `data-tour` id, so the guided tour can spotlight this card. */
+  tour?: string;
 }) {
   return (
-    <li className="cast-panel relative p-5 pl-16">
+    <li className="cast-panel relative p-5 pl-16" data-tour={tour}>
       <span
         aria-hidden
         className={`absolute left-5 top-5 flex h-8 w-8 items-center justify-center rounded-full border font-mono text-xs ${
@@ -243,7 +246,10 @@ export default function Pipeline() {
       </AppNav>
 
       <main className="mx-auto w-full max-w-4xl px-5 py-10 sm:px-8">
-        <p className="font-mono text-[10px] uppercase tracking-[0.2em] text-amber-300/80">
+        <p
+          data-tour="pipeline-title"
+          className="font-mono text-[10px] uppercase tracking-[0.2em] text-amber-300/80"
+        >
           Pipeline
         </p>
         <h1 className="mt-2 text-2xl font-semibold tracking-tight text-zinc-50">
@@ -277,6 +283,7 @@ export default function Pipeline() {
           {/* 1. Ingest */}
           <Step
             n={1}
+            tour="step-ingest"
             title="Manuscript → story graph"
             tone={loaded?.graph ? "done" : loaded ? "todo" : "off"}
             pill={loaded?.graph ? `${loaded.graph.sceneCount} scene(s)` : "nothing ingested"}
@@ -309,6 +316,7 @@ export default function Pipeline() {
           {/* 2. Casting */}
           <Step
             n={2}
+            tour="step-cast"
             title="Cast a voice and a tone for every part"
             tone={busy === "cast" ? "busy" : loaded?.casting ? "done" : loaded?.graph ? "todo" : "off"}
             pill={busy === "cast" ? "judging" : loaded?.casting ? "decided" : "not cast"}
@@ -357,6 +365,7 @@ export default function Pipeline() {
           {/* 3. Shot list via the agent network */}
           <Step
             n={3}
+            tour="step-agent"
             title="Shot list from the agent network"
             tone={busy === "agent" ? "busy" : loaded?.shots?.length ? "done" : loaded?.graph ? "todo" : "off"}
             pill={busy === "agent" ? "delegating" : loaded?.shots?.length ? `${loaded.shots.length} shots` : "no shot list"}
@@ -412,6 +421,7 @@ export default function Pipeline() {
           {/* 4. Audio */}
           <Step
             n={4}
+            tour="step-audio"
             title="Render the audio — voices, tone, ambience"
             tone={
               busy === "audio"
@@ -462,6 +472,7 @@ export default function Pipeline() {
           {/* 5. Animatic boards */}
           <Step
             n={5}
+            tour="step-boards"
             title="Animatic — a storyboard frame per shot"
             tone={
               busy === "boards"
@@ -532,6 +543,7 @@ export default function Pipeline() {
           {/* 6. Veo video */}
           <Step
             n={6}
+            tour="step-video"
             title="Video — one shot with Veo"
             tone={busy === "video" ? "busy" : loaded?.video?.src ? "done" : loaded?.shots?.length ? "todo" : "off"}
             pill={busy === "video" ? "rendering" : loaded?.video?.src ? `shot ${featuredShot} rendered` : "no video"}
@@ -593,6 +605,7 @@ export default function Pipeline() {
           {/* 7. Analytics */}
           <Step
             n={7}
+            tour="step-dashboard"
             title="Every decision in ClickHouse"
             tone={loaded?.analytics?.reachable ? "done" : loaded ? "bad" : "off"}
             pill={

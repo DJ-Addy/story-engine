@@ -124,17 +124,17 @@ export default function Hero() {
           className="mt-10 flex flex-wrap items-center gap-4"
         >
           <Link
-            href="/pipeline"
+            href="/pipeline?tour=1"
             className={`rounded-md bg-amber-400 px-5 py-2.5 text-sm font-medium text-zinc-950 transition-colors hover:bg-amber-300 ${FOCUS_RING}`}
           >
-            Open the demo workspace
+            Take the guided tour
           </Link>
-          <a
-            href="#pipeline"
+          <Link
+            href="/pipeline"
             className={`rounded-md border border-zinc-700 px-5 py-2.5 text-sm font-medium text-zinc-200 transition-colors hover:border-zinc-500 hover:text-zinc-50 ${FOCUS_RING}`}
           >
-            Read the pipeline
-          </a>
+            Walk the pipeline yourself
+          </Link>
         </motion.div>
       </div>
 
