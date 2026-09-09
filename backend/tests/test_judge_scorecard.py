@@ -81,8 +81,10 @@ def proposal():
                 tone="urgent",
                 tone_evidence="text_cues",
                 confidence=0.28,
+                # As a saved casting comes back: the reasoning survives, the
+                # tag fit and the line count do not.
                 voice_fit=0.0,
-                line_count=4,
+                line_count=0,
                 rationale="TOM speaks 4 line(s); no line carries a delivery tag.",
             ),
         ],
@@ -187,7 +189,7 @@ def judgment():
 
 class TestCastingScorecard:
     def test_every_part_appears_with_its_voice_and_reasoning(self, proposal):
-        text = render_casting_scorecard(proposal)
+        text = flat(render_casting_scorecard(proposal))
         assert "THE NARRATOR" in text
         for entry in proposal.entries[1:]:
             assert entry.character in text
@@ -195,55 +197,63 @@ class TestCastingScorecard:
             assert entry.rationale in text
 
     def test_absent_tone_is_explained_rather_than_left_blank(self, proposal):
-        text = render_casting_scorecard(proposal)
+        text = flat(render_casting_scorecard(proposal))
         assert "no tone proposed" in text
         assert "the text gave no signal" in text
         # And the confidence that goes with it is never dressed up as a score.
-        assert "not applicable" in text
+        assert "confidence .... not applicable" in text
 
     def test_tone_evidence_tier_is_named(self, proposal):
-        text = render_casting_scorecard(proposal)
+        text = flat(render_casting_scorecard(proposal))
         assert "'whispering'" in text and "wrote into the script" in text
         assert "'urgent'" in text and "inferred from the words" in text
 
-    def test_unrecorded_tag_fit_is_not_printed_as_a_zero_score(self, proposal):
-        """TOM's entry came back from storage, which drops the fit number."""
-        text = render_casting_scorecard(proposal)
-        assert "not recorded" in text
-        assert "0.00" not in text
+    def test_unrecorded_numbers_are_not_printed_as_zeros(self, proposal):
+        """TOM's entry came back from storage, which drops the numbers."""
+        text = flat(render_casting_scorecard(proposal))
+        assert "tag fit ....... not recorded" in text
+        assert "tag fit ....... 0.00" not in text
+        assert "lines ......... not recorded" in text
+        assert "lines ......... 0 dialogue" not in text
+        # Explained once for the whole cast rather than in every row it touches.
+        assert text.count("read back from storage") == 1
+
+    def test_a_live_proposal_prints_its_numbers(self, proposal):
+        """MARA was proposed, not read back, so nothing about her is missing."""
+        text = flat(render_casting_scorecard(proposal))
+        assert "lines ......... 5 dialogue lines in this draft" in text
+        assert "tag fit ....... 0.64" in text
 
     def test_an_empty_cast_says_so(self):
-        text = render_casting_scorecard(CastingProposal())
-        assert "nothing was cast" in text
+        assert "nothing was cast" in flat(render_casting_scorecard(CastingProposal()))
 
 
 class TestVoiceFitScorecard:
     def test_names_every_character_with_its_score(self, voice_fit):
-        text = render_voice_fit_scorecard(voice_fit)
+        text = flat(render_voice_fit_scorecard(voice_fit))
         for fit in voice_fit.characters:
             assert fit.character in text
             assert f"{fit.score:.2f}" in text
             assert fit.rationale in text
 
     def test_reports_line_count_share_and_emotions(self, voice_fit):
-        text = render_voice_fit_scorecard(voice_fit)
+        text = flat(render_voice_fit_scorecard(voice_fit))
         assert "5 dialogue lines" in text
         assert "56%" in text  # speaks_share 0.556, rendered as a percentage
         assert "whispering, serious" in text
 
     def test_absent_emotions_are_explained(self, voice_fit):
-        text = render_voice_fit_scorecard(voice_fit)
-        assert "none recorded" in text
+        assert "none recorded" in flat(render_voice_fit_scorecard(voice_fit))
 
     def test_better_fitting_voice_is_quoted_with_its_own_score(self, voice_fit):
-        text = render_voice_fit_scorecard(voice_fit)
-        assert "'Domi'" in text and "0.81" in text
+        text = flat(render_voice_fit_scorecard(voice_fit))
+        assert "'Domi' (id strong1) scores 0.81" in text
 
     def test_uncast_speakers_are_listed(self, voice_fit):
-        assert "HARBORMASTER" in render_voice_fit_scorecard(voice_fit)
+        assert "HARBORMASTER" in flat(render_voice_fit_scorecard(voice_fit))
 
     def test_note_is_carried_through(self, voice_fit):
-        text = render_voice_fit_scorecard(voice_fit, note="Scored from storage.")
+        text = flat(render_voice_fit_scorecard(voice_fit, note="Scored from storage."))
         assert "Scored from storage." in text
 
 
@@ -261,8 +271,8 @@ class TestAnimaticScorecard:
         assert text.index("AXIS_CROSS") < text.index("PACING_LONG_TAKE")
         assert "scene 1, shot 2" in text
 
-    def test_untouched_axis_says_so(self, judgment):
-        assert "nothing pushed this axis down" in render_animatic_scorecard(judgment)
+    def test_axis_with_no_findings_says_so(self, judgment):
+        assert "no finding was raised on this axis" in render_animatic_scorecard(judgment)
 
     def test_scene_breakdown_is_present(self, judgment):
         text = render_animatic_scorecard(judgment)

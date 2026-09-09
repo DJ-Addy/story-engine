@@ -440,3 +440,161 @@ class TestDecideCasting:
             headers=headers,
         )
         assert r.status_code == 404
+
+
+# --- /judge/scorecard ------------------------------------------------------ #
+def without_timestamp(body):
+    """The scorecard minus its one moving part.
+
+    Two requests are two moments, so the "Generated ... UTC" line can differ by
+    a second between them. Everything else on the page is a pure function of
+    the stored judgements, which is what these tests compare.
+    """
+    return [line for line in body.splitlines() if not line.startswith("Generated ")]
+
+
+class TestScorecard:
+    """One URL that explains, in prose, how every judge number was arrived at."""
+
+    def test_explains_every_character_score_the_judge_gave(self, client, sample_fountain):
+        headers = auth_headers(client)
+        project_id = project_with_script(client, headers, sample_fountain)
+        client.post(
+            f"/api/v1/projects/{project_id}/judge/casting",
+            json={"available_voices": POOL},
+            headers=headers,
+        )
+        client.post(
+            f"/api/v1/projects/{project_id}/scenes/1/shotlist",
+            json=violating_shotlist(1),
+            headers=headers,
+        )
+
+        r = client.get(f"/api/v1/projects/{project_id}/judge/scorecard", headers=headers)
+        assert r.status_code == 200
+        assert r.headers["content-type"] == "text/plain; charset=utf-8"
+        body = r.text
+        assert "JUDGE SCORECARD" in body and "Wager" in body
+
+        # The same casting, scored through the public judge endpoint: every
+        # character and every number on the page has to be one the judge
+        # actually returned, not one the renderer arrived at on its own.
+        saved = client.get(
+            f"/api/v1/projects/{project_id}/judge/casting", headers=headers
+        ).json()
+        casting = {
+            e["character"]: {"id": e["voice_id"], "name": e["voice_name"], "tags": []}
+            for e in saved["entries"]
+            if e["character"] is not None
+        }
+        fit = client.post(
+            f"/api/v1/projects/{project_id}/judge/voices",
+            json={"casting": casting},
+            headers=headers,
+        ).json()
+        assert fit["characters"], "the sample script has speaking characters"
+        for character in fit["characters"]:
+            assert character["character"] in body
+            assert f"{character['score']:.2f}" in body
+
+        # And the animatic judgement's own finding is quoted under its axis.
+        assert "AXIS_CROSS" in body
+        assert "continuity" in body and "coverage" in body
+
+    def test_untoned_part_reads_as_an_explanation_not_a_blank(
+        self, client, sample_fountain
+    ):
+        headers = auth_headers(client)
+        project_id = project_with_script(client, headers, sample_fountain)
+        client.post(
+            f"/api/v1/projects/{project_id}/judge/casting",
+            json={"available_voices": POOL},
+            headers=headers,
+        )
+        saved = client.get(
+            f"/api/v1/projects/{project_id}/judge/casting", headers=headers
+        ).json()
+        assert any(e["tone"] is None for e in saved["entries"]), "expected an untoned part"
+
+        body = client.get(
+            f"/api/v1/projects/{project_id}/judge/scorecard", headers=headers
+        ).text
+        assert "no tone proposed" in body
+        assert "the text gave no signal" in " ".join(body.split())
+
+    def test_partly_judged_project_is_200_with_a_not_yet_section(
+        self, client, sample_fountain
+    ):
+        """A script with nothing judged is a normal state, not an error."""
+        headers = auth_headers(client)
+        project_id = project_with_script(client, headers, sample_fountain)
+
+        r = client.get(f"/api/v1/projects/{project_id}/judge/scorecard", headers=headers)
+        assert r.status_code == 200
+        flat = " ".join(r.text.split())
+        assert "CASTING — not decided yet" in flat
+        assert "ANIMATIC — not judged yet" in flat
+        # The section names the endpoint that would fill it in.
+        assert "/judge/casting" in flat and "/shotlist" in flat
+
+    def test_404_when_no_script(self, client):
+        headers = auth_headers(client)
+        project_id = client.post(
+            "/api/v1/projects",
+            json={"title": "Empty", "rights_attested": True},
+            headers=headers,
+        ).json()["id"]
+        for path in ("scorecard", "scorecard.txt"):
+            r = client.get(
+                f"/api/v1/projects/{project_id}/judge/{path}", headers=headers
+            )
+            assert r.status_code == 404
+
+    def test_txt_variant_is_offered_as_a_download(self, client, sample_fountain):
+        headers = auth_headers(client)
+        project_id = project_with_script(client, headers, sample_fountain)
+        r = client.get(
+            f"/api/v1/projects/{project_id}/judge/scorecard.txt", headers=headers
+        )
+        assert r.status_code == 200
+        assert r.headers["content-disposition"] == (
+            'attachment; filename="wager-scorecard.txt"'
+        )
+
+    def test_both_routes_serve_the_same_page(self, client, sample_fountain):
+        headers = auth_headers(client)
+        project_id = project_with_script(client, headers, sample_fountain)
+        client.post(
+            f"/api/v1/projects/{project_id}/judge/casting",
+            json={"available_voices": POOL},
+            headers=headers,
+        )
+        inline = client.get(
+            f"/api/v1/projects/{project_id}/judge/scorecard", headers=headers
+        )
+        download = client.get(
+            f"/api/v1/projects/{project_id}/judge/scorecard.txt", headers=headers
+        )
+        assert without_timestamp(inline.text) == without_timestamp(download.text)
+        assert "content-disposition" not in inline.headers
+
+    def test_repeated_requests_render_the_same_page(self, client, sample_fountain):
+        headers = auth_headers(client)
+        project_id = project_with_script(client, headers, sample_fountain)
+        client.post(
+            f"/api/v1/projects/{project_id}/judge/casting",
+            json={"available_voices": POOL},
+            headers=headers,
+        )
+        first = client.get(f"/api/v1/projects/{project_id}/judge/scorecard", headers=headers)
+        second = client.get(f"/api/v1/projects/{project_id}/judge/scorecard", headers=headers)
+        assert without_timestamp(first.text) == without_timestamp(second.text)
+
+    def test_owner_isolation(self, client, sample_fountain):
+        headers_a = auth_headers(client, email="a@example.com")
+        headers_b = auth_headers(client, email="b@example.com")
+        project_id = project_with_script(client, headers_a, sample_fountain)
+        r = client.get(
+            f"/api/v1/projects/{project_id}/judge/scorecard", headers=headers_b
+        )
+        assert r.status_code == 404

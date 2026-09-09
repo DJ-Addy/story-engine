@@ -80,6 +80,10 @@ _EMOTION_STYLE_PROMPT: dict[str, str] = {
     "sarcastic": "Say the following line dryly and sardonically, with a mocking lilt.",
     "surprised": "Say the following line with genuine surprise — a sharp, startled lift.",
     "serious": "Say the following line gravely and firmly — low, level and unsmiling.",
+    # Worded as enticement rather than seduction on purpose. The model
+    # refuses some phrasings outright, and what the Sirens do to Ulysses
+    # is luring — an invitation you cannot refuse, not a come-on.
+    "seductive": "Say the following line as an enticing invitation — warm, unhurried and honeyed, drawing the listener in.",
 }
 assert set(_EMOTION_STYLE_PROMPT) == set(EMOTIONS), "style table drifted from EMOTIONS vocabulary"
 

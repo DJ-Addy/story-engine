@@ -181,19 +181,41 @@ def _confidence_row(entry: CastingProposalEntry) -> list[str]:
     )
 
 
-def _voice_fit_row(entry: CastingProposalEntry) -> list[str]:
-    # A saved casting round-trips through app.api.repo.CastEntry, which keeps
-    # the rationale but has no column for the tag fit — so 0.0 here means "not
-    # recorded", not "a terrible voice". A real fit cannot be 0.00: it would
-    # need the voice to sit at the far end of both axes at once, which no tag
-    # in app.judge.voices' tables reaches.
-    if entry.voice_fit <= 0.0:
+def _read_back(entry: CastingProposalEntry) -> bool:
+    """Did this entry come back from a saved casting rather than a live proposal?
+
+    A saved casting round-trips through :class:`app.api.repo.CastEntry`, which
+    keeps the voice, the tone and the whole rationale but has nowhere to put the
+    tag fit or the line count — so those come back as zeros that mean "not
+    recorded", not "no lines" and certainly not "a terrible voice". The tag fit
+    is the reliable tell: a live proposal can never score 0.00, which would need
+    the voice to sit at the far end of both axes at once, and no tag in
+    :mod:`app.judge.voices`' tables reaches either extreme.
+    """
+    return entry.voice_fit <= 0.0
+
+
+# Kept short because the section header already explains, once, what storage
+# dropped and where to read it instead.
+_UNRECORDED = "not recorded — see the sentence under 'why'."
+
+
+def _lines_row(entry: CastingProposalEntry) -> list[str]:
+    if _read_back(entry):
+        return _field("lines", _UNRECORDED)
+    if entry.is_narrator:
         return _field(
-            "tag fit",
-            "not recorded — this casting was read back from storage, which "
-            "keeps the reasoning but not the fit number; the sentence below "
-            "quotes it as it stood when the part was cast.",
+            "lines",
+            f"{_plural(entry.line_count, 'narration line')} — the action and "
+            "narration a narrator reads, which is every spoken line no "
+            "character owns",
         )
+    return _field("lines", f"{_plural(entry.line_count, 'dialogue line')} in this draft")
+
+
+def _voice_fit_row(entry: CastingProposalEntry) -> list[str]:
+    if _read_back(entry):
+        return _field("tag fit", _UNRECORDED)
     return _field(
         "tag fit",
         f"{_score(entry.voice_fit)} — how far the voice's tag-derived energy "
@@ -206,15 +228,7 @@ def _casting_entry_block(index: int, entry: CastingProposalEntry) -> list[str]:
     who = "THE NARRATOR" if entry.is_narrator else (entry.character or "UNNAMED PART")
     lines = [f"{_INDENT}[{index}] {who}"]
     lines += _field("voice", f"'{entry.voice_name}' (id {entry.voice_id})")
-    if entry.is_narrator:
-        counted = (
-            f"{_plural(entry.line_count, 'narration line')} — the action and "
-            "narration a narrator reads, which is every spoken line no "
-            "character owns"
-        )
-    else:
-        counted = f"{_plural(entry.line_count, 'dialogue line')} in this draft"
-    lines += _field("lines", counted)
+    lines += _lines_row(entry)
     lines += _tone_row(entry)
     lines += _confidence_row(entry)
     lines += _voice_fit_row(entry)
@@ -238,6 +252,17 @@ def render_casting_scorecard(proposal: CastingProposal) -> str:
     if not proposal.entries:
         lines += _para("This casting has no parts in it — nothing was cast.")
         return "\n".join(lines)
+    if any(_read_back(entry) for entry in proposal.entries):
+        # Said once at the top rather than apologised for in every row it
+        # affects: what storage dropped is the same fact about every part.
+        lines += _para(
+            "This casting was read back from storage, which keeps every part's "
+            "reasoning but not the numbers behind it. Where a row below says "
+            "the value is not recorded, the sentence under 'why' is the "
+            "original one, quoting the figure as it stood when the part was "
+            "cast."
+        )
+        lines.append("")
 
     for index, entry in enumerate(proposal.entries, start=1):
         lines += _casting_entry_block(index, entry)
@@ -333,9 +358,15 @@ def render_voice_fit_scorecard(result: VoiceFitResult, *, note: str | None = Non
         lines.append("")
 
     if result.uncast_characters:
+        # Subject-verb agreement, in the same spirit as app.judge.casting's
+        # _carry: these sentences are read by people, not parsed.
+        count = len(result.uncast_characters)
         lines += _para(
-            f"{_plural(len(result.uncast_characters), 'speaking character')} "
-            "carry no voice at all and so appear in no score above: "
+            f"{_plural(count, 'speaking character')} "
+            + ("carries" if count == 1 else "carry")
+            + " no voice at all and so "
+            + ("appears" if count == 1 else "appear")
+            + " in no score above: "
             + ", ".join(result.uncast_characters)
             + "."
         )
@@ -410,7 +441,7 @@ def _axis_block(judgment: AnimaticJudgment) -> list[str]:
         findings = by_axis[axis]
         if not findings:
             lines += _para(
-                "nothing pushed this axis down.", indent=_INDENT + "      "
+                "no finding was raised on this axis.", indent=_INDENT + "      "
             )
             continue
         # Already ranked worst first by the judge (error before warn before
@@ -440,7 +471,12 @@ def render_animatic_scorecard(judgment: AnimaticJudgment) -> str:
         )
         return "\n".join(lines).rstrip()
 
-    lines += _para("The four axes, worst first, and what pushed each one down:")
+    lines += _para(
+        "The four axes, worst first, and what pushed each one down. A finding "
+        "is not the only way to lose points: coverage and variety are measured "
+        "straight off the shot list, so an axis can sit below 1.00 with nothing "
+        "listed under it."
+    )
     lines.append("")
     lines += _axis_block(judgment)
     lines.append("")
@@ -536,7 +572,7 @@ def render_full_scorecard(
     lines.append(_rule("="))
     lines.append("")
     lines += _para(_PREAMBLE, indent="")
-    lines.append("")
+    lines += ["", ""]
 
     sections = [
         render_casting_scorecard(casting)

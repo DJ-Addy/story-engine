@@ -37,6 +37,7 @@ EMOTIONS: frozenset[str] = frozenset(
         "sarcastic",
         "surprised",
         "serious",
+        "seductive",
     }
 )
 
@@ -46,6 +47,10 @@ EMOTIONS: frozenset[str] = frozenset(
 _EMOTION_KEYWORDS: dict[str, tuple[str, ...]] = {
     "whispering": ("whisper", "whispers", "whispering", "whispered", "hushed", "sotto", "murmuring", "under breath"),
     "shouting": ("shout", "shouts", "shouting", "yell", "yells", "yelling", "scream", "screams", "screaming", "bellowing", "roaring", "loudly"),
+    # Allure is a manner rather than a volume, so it sits below the two
+    # audible cues and above the general buckets: a line that is both
+    # enticing and gentle is being seductive, not merely calm.
+    "seductive": ("seductive", "seductively", "alluring", "alluringly", "allure", "enticing", "enticingly", "entice", "enticed", "beguiling", "beguile", "coaxing", "coaxingly", "coax", "sultry", "honeyed", "luring", "lure", "tempting", "temptingly", "tempt", "enchanting", "enchanted", "enchantment", "charmed", "charming", "bewitching", "sweetness", "purring", "silken", "inviting", "invitingly", "caressing"),
     "afraid": ("afraid", "fearful", "fearfully", "scared", "terrified", "frightened", "nervous", "nervously", "anxious", "anxiously", "trembling", "panicked"),
     "angry": ("angry", "angrily", "furious", "furiously", "enraged", "irate", "seething", "snarling", "sharply"),
     "sad": ("sad", "sadly", "sorrowful", "sorrowfully", "mournfully", "grieving", "tearful", "tearfully", "despondent", "forlorn", "dejected", "heartbroken"),
